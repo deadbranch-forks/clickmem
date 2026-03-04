@@ -100,6 +100,8 @@ def recall(
     query: str = typer.Argument(..., help="Search query"),
     layer: Optional[str] = typer.Option(None, help="Filter by layer"),
     category: Optional[str] = typer.Option(None, help="Filter by category"),
+    top_k: int = typer.Option(10, "--top-k", "-k", help="Max number of results"),
+    min_score: float = typer.Option(0.0, "--min-score", help="Minimum relevance score threshold"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Semantic search for memories."""
@@ -107,8 +109,10 @@ def recall(
     emb = _get_emb()
 
     from memory_core.retrieval import hybrid_search
-    cfg = RetrievalConfig(layer=layer, category=category)
+    cfg = RetrievalConfig(layer=layer, category=category, top_k=top_k)
     results = hybrid_search(db, emb, query, cfg=cfg)
+    if min_score > 0:
+        results = [r for r in results if r.get("final_score", 0) >= min_score]
 
     if json_output:
         typer.echo(json.dumps(results, default=str))
@@ -354,19 +358,35 @@ def import_openclaw(
 
 @app.command(name="export-context")
 def export_context(
-    workspace_path: str = typer.Argument(..., help="Workspace directory to export into"),
+    workspace_path: str = typer.Argument("", help="Workspace directory to export into (omit for --content mode)"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    content_mode: bool = typer.Option(False, "--content", help="Output markdown content as JSON (no file writes)"),
+    max_items: int = typer.Option(50, "--max-items", "-n", help="Max memory entries per section"),
+    max_chars: int = typer.Option(8000, "--max-chars", "-c", help="Max chars per section"),
 ):
-    """Export memories to workspace .md files (for hook integration)."""
+    """Export memories to workspace .md files or as JSON content."""
     from memory_core.md_sync_mod import md_sync
+
+    db = _get_db()
+    limits = dict(max_items=max_items, max_chars=max_chars)
+
+    if content_mode:
+        result = {
+            "memory_md": md_sync.format_memory_md(db, **limits),
+            "daily_md": md_sync.format_daily_md(db, **limits),
+        }
+        typer.echo(json.dumps(result))
+        return
+
+    if not workspace_path:
+        console.print("[red]Error: workspace_path required (or use --content)[/red]")
+        raise typer.Exit(code=1)
 
     workspace_path = os.path.expanduser(workspace_path)
     os.makedirs(workspace_path, exist_ok=True)
 
-    db = _get_db()
-
-    memory_md = md_sync.export_memory_md(db, workspace_path)
-    daily_md = md_sync.export_daily_md(db, workspace_path)
+    memory_md = md_sync.export_memory_md(db, workspace_path, **limits)
+    daily_md = md_sync.export_daily_md(db, workspace_path, **limits)
 
     result = {
         "memory_md": memory_md,
