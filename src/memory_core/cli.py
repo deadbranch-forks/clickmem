@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from typing import Optional
 
@@ -378,3 +379,82 @@ def export_context(
         console.print(f"[green]✓[/green] Exported context to {workspace_path}")
         console.print(f"  {memory_md}")
         console.print(f"  {daily_md}")
+
+
+@app.command()
+def uninstall(
+    export_back: bool = typer.Option(
+        False, "--export", help="Export memories back to OpenClaw .md files before uninstalling",
+    ),
+    openclaw_dir: str = typer.Option(
+        os.path.expanduser("~/.openclaw"),
+        help="Path to OpenClaw data directory",
+    ),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Uninstall clickmem: optionally export memories back, remove hook and data."""
+    from memory_core.md_sync_mod import md_sync
+
+    openclaw_dir = os.path.expanduser(openclaw_dir)
+    result: dict = {"exported_workspaces": [], "hook_removed": False, "data_removed": False}
+
+    # ── 1. Export back to OpenClaw workspace .md files ────────────────
+    if export_back:
+        db = _get_db()
+        # Find all existing workspace dirs and export into each
+        if os.path.isdir(openclaw_dir):
+            import glob
+            workspace_dirs = sorted(glob.glob(os.path.join(openclaw_dir, "workspace-*")))
+            for ws in workspace_dirs:
+                ws_name = os.path.basename(ws)
+                try:
+                    md_sync.export_memory_md(db, ws)
+                    md_sync.export_daily_md(db, ws)
+                    result["exported_workspaces"].append(ws_name)
+                except Exception as e:
+                    if not json_output:
+                        console.print(f"  [yellow]Warning: failed to export to {ws_name}: {e}[/yellow]")
+
+            if not json_output:
+                n = len(result["exported_workspaces"])
+                console.print(f"[green]✓[/green] Exported memories to {n} workspace(s)")
+
+    # ── 2. Confirm before destructive actions ─────────────────────────
+    if not yes and not json_output:
+        console.print("\nThis will:")
+        console.print("  - Remove clickmem chDB data (~/.openclaw/memory/chdb-data/)")
+        console.print("  - Uninstall the OpenClaw hook")
+        confirm = typer.confirm("Continue?")
+        if not confirm:
+            console.print("Aborted.")
+            raise typer.Exit(code=0)
+
+    # ── 3. Remove OpenClaw hook ───────────────────────────────────────
+    if shutil.which("openclaw"):
+        try:
+            import subprocess
+            subprocess.run(
+                ["openclaw", "hooks", "uninstall", "clickmem"],
+                capture_output=True, timeout=10,
+            )
+            result["hook_removed"] = True
+        except Exception:
+            pass
+
+    # ── 4. Remove chDB data directory ─────────────────────────────────
+    chdb_data = os.path.expanduser("~/.openclaw/memory/chdb-data")
+    if os.path.isdir(chdb_data):
+        shutil.rmtree(chdb_data)
+        result["data_removed"] = True
+
+    if json_output:
+        typer.echo(json.dumps(result))
+    else:
+        console.print(f"\n[green]✓[/green] ClickMem uninstalled.")
+        if result["hook_removed"]:
+            console.print("  Hook removed.")
+        if result["data_removed"]:
+            console.print("  chDB data removed.")
+        if result["exported_workspaces"]:
+            console.print(f"  Memories exported to {len(result['exported_workspaces'])} workspace(s).")
