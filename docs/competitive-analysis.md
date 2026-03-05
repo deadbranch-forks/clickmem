@@ -1,128 +1,128 @@
-# ClickMem 竞品分析与优化计划
+# ClickMem Competitive Analysis & Optimization Plan
 
-## 一、竞品概览
+## 1. Competitor Overview
 
-| 维度 | **Mem0** | **Supermemory** | **MemOS** | **ClickMem (当前)** |
-|------|---------|----------------|-----------|-------------------|
-| 定位 | 通用AI记忆层 | Agent记忆引擎 | LLM记忆操作系统 | 本地AI编码助手记忆 |
-| 部署 | Cloud + Self-host | Cloud (MCP) | Self-host | 纯本地 |
-| 存储 | Vector DB + Graph DB | Cloudflare DO | SQLite/多后端 | chDB (嵌入式ClickHouse) |
-| 嵌入 | Remote API | Remote API | Local/Remote | **本地 Qwen3** (优势) |
-| 隐私 | 需API Key | 云端 | 可本地 | **完全本地** (优势) |
-| 许可 | Apache 2.0 | Proprietary | Apache 2.0 | (待定) |
+| Dimension | **Mem0** | **Supermemory** | **MemOS** | **ClickMem (current)** |
+|-----------|---------|----------------|-----------|----------------------|
+| Positioning | General AI memory layer | Agent memory engine | LLM memory OS | Local AI coding agent memory |
+| Deployment | Cloud + Self-host | Cloud (MCP) | Self-host | Fully local |
+| Storage | Vector DB + Graph DB | Cloudflare DO | SQLite / multi-backend | chDB (embedded ClickHouse) |
+| Embeddings | Remote API | Remote API | Local / Remote | **Local Qwen3** (advantage) |
+| Privacy | Requires API key | Cloud-hosted | Can run locally | **Fully local** (advantage) |
+| License | Apache 2.0 | Proprietary | Apache 2.0 | (TBD) |
 
-## 二、核心能力对比
+## 2. Core Capability Comparison
 
-### 1. 记忆类型
+### 2.1 Memory Types
 
-| 记忆类型 | Mem0 | Supermemory | MemOS | ClickMem |
-|---------|------|-------------|-------|----------|
-| 语义/长期 | ✅ vector + graph | ✅ knowledge chains | ✅ textual memory | ✅ L2 semantic |
-| 事件/短期 | ✅ episodic | ✅ session-based | ✅ activation memory | ✅ L1 episodic |
-| 工作记忆 | ✅ context window | ✅ working memory | ✅ KV cache | ✅ L0 working |
-| **图谱记忆** | ✅ Neo4j/Memgraph | ✅ 关系链 | ❌ | ❌ **缺失** |
-| **参数记忆** | ❌ | ❌ | ✅ LoRA weights | ❌ (不适用) |
+| Memory Type | Mem0 | Supermemory | MemOS | ClickMem |
+|-------------|------|-------------|-------|----------|
+| Semantic / long-term | ✅ vector + graph | ✅ knowledge chains | ✅ textual memory | ✅ L2 semantic |
+| Episodic / short-term | ✅ episodic | ✅ session-based | ✅ activation memory | ✅ L1 episodic |
+| Working memory | ✅ context window | ✅ working memory | ✅ KV cache | ✅ L0 working |
+| **Graph memory** | ✅ Neo4j / Memgraph | ✅ relation chains | ❌ | ❌ **missing** |
+| **Parametric memory** | ❌ | ❌ | ✅ LoRA weights | ❌ (N/A) |
 
-### 2. 写入/更新策略
+### 2.2 Write / Update Strategy
 
-| 能力 | Mem0 | Supermemory | ClickMem |
-|-----|------|-------------|----------|
-| 提取 → 去重管道 | ✅ 2-phase (Extract → Update) | ✅ chunk + contextual | ✅ upsert (search → LLM judge) |
-| 矛盾检测 | ✅ LLM 4操作 (ADD/UPDATE/DELETE/NOOP) | ✅ isLatest 字段 | ✅ 同 Mem0 模式 |
-| **关系版本控制** | ✅ graph edges | ✅ Updates/Extends/Derives 三种关系 | ❌ **缺失** |
-| **实体抽取** | ✅ LLM → 图节点/边 | ✅ 隐含于知识链 | ⚠️ entities 字段存在但未用于检索 |
-| 批量操作 | ✅ batch up to 1000 | ✅ | ❌ |
+| Capability | Mem0 | Supermemory | ClickMem |
+|-----------|------|-------------|----------|
+| Extract → dedup pipeline | ✅ 2-phase (Extract → Update) | ✅ chunk + contextual | ✅ upsert (search → LLM judge) |
+| Contradiction detection | ✅ LLM 4-op (ADD/UPDATE/DELETE/NOOP) | ✅ isLatest field | ✅ same as Mem0 |
+| **Relational versioning** | ✅ graph edges | ✅ Updates/Extends/Derives | ❌ **missing** |
+| **Entity extraction** | ✅ LLM → graph nodes/edges | ✅ implicit in knowledge chains | ⚠️ entities field exists but unused in retrieval |
+| Batch operations | ✅ batch up to 1000 | ✅ | ❌ |
 
-### 3. 检索策略
+### 2.3 Retrieval Strategy
 
-| 能力 | Mem0 | Supermemory | ClickMem |
-|-----|------|-------------|----------|
-| 向量相似度 | ✅ | ✅ | ✅ |
-| 关键词匹配 | ✅ | ✅ | ✅ |
-| 时间衰减 | ❌ (无明确) | ✅ smart forgetting | ✅ **差异化衰减** (优势) |
-| MMR 去重 | ❌ | ❌ | ✅ **MMR** (优势) |
-| **图遍历** | ✅ multi-hop reasoning | ✅ 关系链追踪 | ❌ **缺失** |
-| **时间推理** | ⚠️ 基础 | ✅ temporal grounding | ❌ **缺失** |
-| access_count 加权 | ❌ | ✅ 频次加权 | ⚠️ 字段存在但未用于评分 |
+| Capability | Mem0 | Supermemory | ClickMem |
+|-----------|------|-------------|----------|
+| Vector similarity | ✅ | ✅ | ✅ |
+| Keyword matching | ✅ | ✅ | ✅ |
+| Time decay | ❌ (not explicit) | ✅ smart forgetting | ✅ **per-layer decay** (advantage) |
+| MMR diversity | ❌ | ❌ | ✅ **MMR** (advantage) |
+| **Graph traversal** | ✅ multi-hop reasoning | ✅ relation chain traversal | ❌ **missing** |
+| **Temporal reasoning** | ⚠️ basic | ✅ temporal grounding | ❌ **missing** |
+| access_count weighting | ❌ | ✅ frequency-weighted | ⚠️ field exists but ignored in scoring |
 
-### 4. 自维护
+### 2.4 Self-Maintenance
 
-| 能力 | Mem0 | Supermemory | ClickMem |
-|-----|------|-------------|----------|
-| 过期清理 | ✅ | ✅ smart forgetting | ✅ cleanup_stale |
-| 压缩/摘要 | ❌ (依赖外部) | ✅ context rewriting | ✅ compress_episodic |
-| 模式晋升 | ❌ | ✅ hierarchical promotion | ✅ promote_to_semantic |
-| 语义审查 | ❌ | ❌ | ✅ review_semantic |
-| **事件驱动维护** | ❌ | ❌ | ✅ session boundary hook |
+| Capability | Mem0 | Supermemory | ClickMem |
+|-----------|------|-------------|----------|
+| Stale cleanup | ✅ | ✅ smart forgetting | ✅ cleanup_stale |
+| Compression / summarization | ❌ (external) | ✅ context rewriting | ✅ compress_episodic |
+| Pattern promotion | ❌ | ✅ hierarchical promotion | ✅ promote_to_semantic |
+| Semantic review | ❌ | ❌ | ✅ review_semantic |
+| **Event-driven maintenance** | ❌ | ❌ | ✅ session boundary hook |
 
-## 三、ClickMem 优劣势总结
+## 3. ClickMem Strengths & Gaps
 
-### 优势 (Keep)
-1. **完全本地运行** — 零API费用、零数据泄露，是唯一不需要云端的方案
-2. **本地嵌入模型** — Qwen3-Embedding-0.6B 无需远程API
-3. **差异化时间衰减** — L1指数衰减 + L2对数衰减，比竞品更精细
-4. **MMR去重** — 检索结果多样性，竞品均无
-5. **事件驱动维护** — session boundary触发，比定时cron更高效
-6. **chDB嵌入式** — 无需独立数据库进程
+### Strengths (Keep)
+1. **Fully local** — zero API cost, zero data leakage; the only solution that needs no cloud
+2. **Local embedding model** — Qwen3-Embedding-0.6B, no remote API required
+3. **Per-layer time decay** — L1 exponential + L2 logarithmic, finer-grained than competitors
+4. **MMR diversity** — result de-duplication via re-ranking; no competitor offers this
+5. **Event-driven maintenance** — triggered on session boundary, more efficient than scheduled cron
+6. **Embedded chDB** — no separate database process needed
 
-### 劣势/差距 (Gap)
-1. **无实体关系图** — Mem0有Neo4j图谱，Supermemory有知识链，我们的entities字段未利用
-2. **无关系版本控制** — 记忆之间没有update/extends/derives关系追踪
-3. **access_count未用于评分** — 字段存在但检索时被忽略
-4. **无时间推理** — 无法回答"上周做了什么"这类时间范围查询
-5. **capture过于简单** — 直接存原始对话文本，未做LLM提取摘要
-6. **实体未用于检索** — entities字段只存不用
+### Gaps
+1. **No entity relation graph** — Mem0 has Neo4j, Supermemory has knowledge chains; our entities field is underutilized
+2. **No relational versioning** — no update/extends/derives relationship tracking between memories
+3. **access_count not used in scoring** — field exists but retrieval ignores it
+4. **No temporal reasoning** — cannot answer "what did I do last week" style time-range queries
+5. **Capture too simplistic** — stores raw dialog text without LLM-based extraction
+6. **Entities unused in retrieval** — stored but never matched during search
 
-## 四、优化计划
+## 4. Optimization Plan
 
-基于投入产出比排序，优先做"低成本高收益"的改进：
+Ordered by ROI — low-cost, high-impact improvements first.
 
-### P0: 立即执行 (本次)
+### P0: Immediate (this iteration)
 
-#### 4.1 access_count 参与检索评分
-- **现状**: `access_count` 字段在DB中存在，但 `retrieval.py` 完全忽略
-- **改进**: 检索时将 access_count 作为加权因子，常被访问的记忆分数更高
-- **工作量**: ~20行代码
-- **收益**: 高频记忆优先返回，直接提升召回质量
+#### 4.1 access_count in retrieval scoring
+- **Before**: `access_count` exists in DB but `retrieval.py` ignores it
+- **After**: logarithmic popularity boost — frequently recalled memories score higher
+- **Effort**: ~20 lines
+- **Impact**: high-frequency memories surface first, directly improves recall quality
 
-#### 4.2 entities 参与关键词匹配
-- **现状**: `entities` 字段存储了但检索时不参与匹配
-- **改进**: `_keyword_score` 中加入 entities 匹配
-- **工作量**: ~5行代码
-- **收益**: 人名/工具名精确匹配，提升相关性
+#### 4.2 Entities in keyword matching
+- **Before**: `entities` field stored but not matched during retrieval
+- **After**: `_keyword_score` matches against content + tags + entities
+- **Effort**: ~5 lines
+- **Impact**: exact name/tool matching improves relevance
 
-#### 4.3 capture 智能摘要替代原始文本
-- **现状**: `capture.js` 直接存 `user: xxx\nassistant: yyy` 原始文本
-- **改进**: 用 LLM 提取关键事实/决定再存储（利用已有的 `extractor.py`）
-- **工作量**: ~30行代码改 capture.js
-- **收益**: 减少噪音，episodic内容质量大幅提升
+#### 4.3 Smart capture via LLM extraction
+- **Before**: `capture.js` stores raw `user: xxx\nassistant: yyy` text
+- **After**: LLM extracts key facts/decisions before storing (uses existing `extractor.py`)
+- **Effort**: ~30 lines in capture.js
+- **Impact**: reduces noise, dramatically improves episodic content quality
 
-#### 4.4 recall 时更新 access_count 和 accessed_at
-- **现状**: 检索到的记忆没有更新访问计数
-- **改进**: recall 后更新 access_count += 1 和 accessed_at
-- **工作量**: ~10行代码
-- **收益**: 为 4.1 的 access_count 加权提供数据基础
+#### 4.4 Update access_count on recall
+- **Before**: recalled memories don't update access counters
+- **After**: recall bumps `access_count += 1` and `accessed_at`
+- **Effort**: ~10 lines
+- **Impact**: provides data foundation for 4.1 popularity weighting
 
-### P1: 短期 (后续迭代)
+### P1: Short-term (next iterations)
 
-#### 4.5 时间范围查询
-- 支持 `memory recall --after 2026-03-01 --before 2026-03-05` 时间过滤
-- 让agent能回答"上周做了什么"之类的问题
+#### 4.5 Time-range queries
+- Support `memory recall --after 2026-03-01 --before 2026-03-05`
+- Enables agents to answer "what happened last week" style questions
 
-#### 4.6 轻量实体关系
-- 从 entities 字段构建简单的共现图（不需要Neo4j）
-- 支持"和 Alice 相关的所有记忆"这类关联查询
+#### 4.6 Lightweight entity relations
+- Build a simple co-occurrence graph from the entities field (no Neo4j needed)
+- Support "all memories related to Alice" style association queries
 
-#### 4.7 记忆版本链
-- 新增 `parent_id` 字段追踪 UPDATE 关系
-- 让 review/audit 能看到记忆演变历史
+#### 4.7 Memory version chains
+- Add `parent_id` field to track UPDATE relationships
+- Enable review/audit of how memories evolve over time
 
-### P2: 中长期
+### P2: Long-term
 
 #### 4.8 Graph Memory (Neo4j-free)
-- 用 chDB 内置的 graph 能力或简单邻接表实现轻量知识图谱
-- 支持 multi-hop 查询
+- Implement a lightweight knowledge graph using chDB or simple adjacency tables
+- Support multi-hop queries
 
-#### 4.9 MCP Server 模式
-- 除了 OpenClaw 插件，额外提供 MCP 接口
-- 让 Claude Desktop / Cursor / VS Code 也能使用
+#### 4.9 MCP Server mode
+- Provide an MCP interface alongside the OpenClaw plugin
+- Enable Claude Desktop / Cursor / VS Code integration
