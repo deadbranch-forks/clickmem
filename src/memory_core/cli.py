@@ -138,6 +138,50 @@ def remember(
 
 
 @app.command()
+def extract(
+    text: str = typer.Argument(..., help="Conversation text to extract memories from"),
+    session_id: str = typer.Option("", help="Session ID"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Extract structured memories from conversation text using LLM."""
+    db = _get_db()
+    emb = _get_emb()
+
+    from memory_core.llm import get_llm_complete
+    llm_complete = get_llm_complete()
+
+    if llm_complete is None:
+        # No LLM available — fall back to raw episodic store
+        m = Memory(
+            content=text,
+            layer="episodic",
+            category="event",
+            embedding=emb.encode_document(text),
+            session_id=session_id,
+            source="agent",
+        )
+        db.insert(m)
+        if json_output:
+            typer.echo(json.dumps([m.id]))
+        else:
+            console.print(f"[yellow]⚠[/yellow] No LLM available — stored raw episodic: {m.id[:8]}")
+        return
+
+    from memory_core.extractor import MemoryExtractor
+    extractor = MemoryExtractor(db, emb)
+    ids = extractor.extract(
+        [{"role": "user", "content": text}],
+        llm_complete,
+        session_id=session_id,
+    )
+
+    if json_output:
+        typer.echo(json.dumps(ids))
+    else:
+        console.print(f"[green]✓[/green] Extracted {len(ids)} memories: {', '.join(i[:8] for i in ids)}")
+
+
+@app.command()
 def recall(
     query: str = typer.Argument(..., help="Search query"),
     layer: Optional[str] = typer.Option(None, help="Filter by layer"),
@@ -155,6 +199,13 @@ def recall(
     results = hybrid_search(db, emb, query, cfg=cfg)
     if min_score > 0:
         results = [r for r in results if r.get("final_score", 0) >= min_score]
+
+    # Bump access_count for returned results
+    for r in results:
+        try:
+            db.touch(r["id"])
+        except Exception:
+            pass
 
     if json_output:
         typer.echo(json.dumps(results, default=str))

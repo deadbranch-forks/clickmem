@@ -78,9 +78,21 @@ export default {
       }
     }, { name: "clickmem_forget" });
 
-    // ── Session reset: hook ──
-    api.registerHook(["command:new", "command:reset"], (event) => {
-      log.info("[clickmem] session reset, memory persisted");
+    // ── Session boundary: run lightweight maintenance ──
+    api.registerHook(["command:new", "command:reset"], async (event) => {
+      log.info("[clickmem] session boundary — running maintenance");
+      try {
+        const result = await runAsync(["maintain", "--json"]);
+        const data = JSON.parse(result);
+        const parts = [];
+        if (data.stale_cleaned)  parts.push("stale=" + data.stale_cleaned);
+        if (data.deleted_purged) parts.push("purged=" + data.deleted_purged);
+        if (data.promoted)       parts.push("promoted=" + data.promoted);
+        if (data.reviewed)       parts.push("reviewed=" + data.reviewed);
+        if (parts.length) log.info("[clickmem] maintenance: " + parts.join(", "));
+      } catch (err) {
+        log.warn("[clickmem] maintenance skipped: " + err.message);
+      }
     }, { name: "clickmem-session", description: "ClickMem session boundary handler" });
 
     log.info("[clickmem] plugin registered (recall=" + cfg.autoRecall + ", capture=" + cfg.autoCapture + ")");

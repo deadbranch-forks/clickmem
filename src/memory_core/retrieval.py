@@ -37,18 +37,34 @@ def _time_decay(created_at: datetime | None, half_life_days: float) -> float:
     return math.exp(-math.log(2) * age_days / half_life_days)
 
 
-def _keyword_score(content: str, tags: list[str], query_words: list[str]) -> float:
-    """Simple keyword matching score. Returns value in [0, 1]."""
+def _keyword_score(content: str, tags: list[str], query_words: list[str],
+                   entities: list[str] | None = None) -> float:
+    """Keyword matching score over content, tags, and entities. Returns [0, 1]."""
     if not query_words:
         return 0.0
     content_lower = content.lower()
     tag_set = {t.lower() for t in tags}
+    entity_set = {e.lower() for e in (entities or [])}
     hits = 0
     for w in query_words:
         wl = w.lower()
-        if wl in content_lower or wl in tag_set:
+        if wl in content_lower or wl in tag_set or wl in entity_set:
             hits += 1
     return hits / len(query_words)
+
+
+def _popularity_boost(access_count: int) -> float:
+    """Logarithmic popularity boost from access frequency. Returns [1.0, ~1.15].
+
+    Frequently recalled memories get a mild score boost:
+      0 accesses → 1.00
+      5 accesses → 1.05
+      50 accesses → 1.10
+      500 accesses → 1.15
+    """
+    if access_count <= 0:
+        return 1.0
+    return 1.0 + 0.03 * math.log1p(access_count)
 
 
 def recency_score(
@@ -130,8 +146,10 @@ def hybrid_search(
                 "category": m.category,
                 "content": m.content,
                 "tags": m.tags,
+                "entities": m.entities,
                 "embedding": m.embedding,
                 "created_at": m.created_at,
+                "access_count": m.access_count,
             })
 
     if not candidates:
@@ -145,8 +163,9 @@ def hybrid_search(
             sim = _cosine_similarity(query_vec, c["embedding"])
             vec_score = max(0.0, (sim + 1.0) / 2.0)  # map [-1,1] to [0,1]
 
-        # Keyword score
-        kw_score = _keyword_score(c["content"], c.get("tags", []), query_words)
+        # Keyword score (includes entities)
+        kw_score = _keyword_score(c["content"], c.get("tags", []), query_words,
+                                  c.get("entities"))
 
         # Base score: weighted combination
         base_score = cfg.w_vector * vec_score + cfg.w_keyword * kw_score
@@ -156,10 +175,10 @@ def hybrid_search(
             decay = _time_decay(c["created_at"], cfg.decay_days)
             base_score *= decay
         elif c["layer"] == "semantic":
-            # Log-based recency boost for semantic: high near-term sensitivity
-            # (1min vs 2min ≈ 0.009 diff) but low far-term sensitivity
-            # (3mo vs 4mo ≈ 0.001 diff). Range [0.8, 1.0].
             base_score *= recency_score(c["created_at"])
+
+        # Popularity boost from access frequency
+        base_score *= _popularity_boost(c.get("access_count", 0))
 
         c["_vec_score"] = vec_score
         c["_base_score"] = base_score

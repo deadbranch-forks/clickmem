@@ -26,21 +26,27 @@ export function buildCaptureHandler(cfg, run) {
       return;
     }
 
-    // Truncate to reasonable length
     const truncated = text.length > 2000 ? text.slice(0, 2000) + "..." : text;
 
-    console.log("[clickmem] capture: storing %d chars from last turn", truncated.length);
+    console.log("[clickmem] capture: extracting from %d chars", truncated.length);
 
     try {
-      await run([
-        "remember", truncated,
-        "--layer", "episodic",
-        "--category", "event",
-        "--json"
-      ]);
-      console.log("[clickmem] capture: stored OK");
-    } catch (err) {
-      console.error("[clickmem] capture failed:", err.message);
+      const result = await run(["extract", truncated, "--json"]);
+      const ids = JSON.parse(result);
+      console.log("[clickmem] capture: extracted %d memories", ids.length);
+    } catch {
+      // Fallback: store raw text if LLM extraction fails
+      try {
+        await run([
+          "remember", truncated,
+          "--layer", "episodic",
+          "--category", "event",
+          "--json"
+        ]);
+        console.log("[clickmem] capture: stored raw (extract unavailable)");
+      } catch (err) {
+        console.error("[clickmem] capture failed:", err.message);
+      }
     }
   };
 }

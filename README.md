@@ -129,16 +129,22 @@ memory export-context /path/to/workspace
 
 All commands support `--json` for machine-readable output.
 
-## Why Not Just Use MEMORY.md?
+## Comparison
 
-| | MEMORY.md | ClickMem |
-|---|---|---|
-| Search | Keyword grep | Hybrid vector + keyword + MMR |
-| Structure | Flat text file | Three-layer model with lifecycles |
-| Deduplication | Manual | LLM-judged smart upsert |
-| Maintenance | Manual | Automatic decay, compression, promotion |
-| Embeddings | Remote API (costs money, leaks data) | Local Qwen3 (free, private) |
-| Context loss | Gone after compaction | Emergency flush preserves context |
+| | MEMORY.md | Mem0 | Supermemory | **ClickMem** |
+|---|---|---|---|---|
+| Runs locally | ✅ file | ❌ cloud API | ❌ cloud API | **✅ fully local** |
+| Privacy | ✅ | ❌ data sent to API | ❌ data sent to API | **✅ zero data leaves machine** |
+| Embeddings | N/A | Remote (costs $) | Remote (costs $) | **Local Qwen3 (free)** |
+| Memory layers | Flat file | Semantic + Episodic | Hierarchical | **3-layer (L0/L1/L2)** |
+| Search | Keyword grep | Vector + Graph | Hybrid + Relations | **Vector + Keyword + MMR** |
+| Time decay | None | None | Smart forgetting | **Per-layer decay (exp + log)** |
+| Deduplication | Manual | LLM 4-op upsert | Relational versioning | **LLM 4-op upsert** |
+| Self-maintenance | Manual | ❌ | ❌ | **Auto (cleanup/compress/promote)** |
+| Graph memory | ❌ | ✅ Neo4j | ✅ Knowledge chains | ❌ (planned) |
+| Access tracking | ❌ | ❌ | ✅ | **✅ popularity-weighted recall** |
+| Result diversity | ❌ | ❌ | ❌ | **✅ MMR re-ranking** |
+| Cost | Free | Pay per API call | Pay per API call | **Free** |
 
 ## Development
 

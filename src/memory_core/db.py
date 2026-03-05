@@ -220,6 +220,15 @@ class MemoryDB:
         self.insert(new_memory)
         return new_memory.id
 
+    def touch(self, memory_id: str) -> None:
+        """Bump access_count and accessed_at for a memory."""
+        now = self._now_str()
+        self._session.query(
+            f"ALTER TABLE memories UPDATE access_count = access_count + 1, "
+            f"accessed_at = '{now}' "
+            f"WHERE id = '{self._escape(memory_id)}' AND is_active = 1"
+        )
+
     def deactivate(self, memory_id: str) -> bool:
         existing = self.get(memory_id)
         if existing is None:
