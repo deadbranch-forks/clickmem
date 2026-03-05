@@ -45,9 +45,26 @@ Different memory layers use fundamentally different decay strategies, reflecting
 
 ![Decay Weight Curves](docs/decay_weights.png)
 
-**L1 Episodic — Exponential Decay** (left): Events fade quickly over time, like human episodic memory. The half-life is 60 days — a 2-month-old event scores only 50% of a fresh one. At 120 days with zero access, entries are auto-cleaned. This is classic radioactive decay: `w = e^(-ln2/T * t)`.
+**L1 Episodic — Exponential Decay** (left): Events fade quickly over time, like human episodic memory. The half-life is 60 days — a 2-month-old event scores only 50% of a fresh one. At 120 days with zero access, entries are auto-cleaned. Formula: `w = e^(-ln2/T * t)`.
 
-**L2 Semantic — Logarithmic Recency** (right): Long-term knowledge should almost never lose relevance just because it's old. The recency weight uses the Weber-Fechner law — human perception of time differences is logarithmic: the gap between "1 minute ago" and "2 minutes ago" feels significant, but "3 months ago" vs "4 months ago" feels nearly identical. The score maps to `[0.8, 1.0]`, acting as a mild tiebreaker rather than a dominant factor. Formula: `w = 0.8 + 0.2 / (1 + k * ln(1 + t/τ))`.
+**L2 Semantic — Logarithmic Recency** (right): Long-term knowledge should almost never lose relevance just because it's old. The recency weight uses the Weber-Fechner law — human perception of time differences is logarithmic: the gap between "1 minute ago" and "1 hour ago" feels significant, but "3 months ago" vs "6 months ago" feels nearly identical. The score maps to `[0.8, 1.0]`, acting as a mild tiebreaker rather than a dominant factor. Formula: `w = 0.8 + 0.2 / (1 + k * ln(1 + t/τ))`.
+
+Concrete weight values at different ages:
+
+| Age | L1 Episodic | L2 Semantic |
+|-----|-------------|-------------|
+| 1 min | 1.000 | 0.981 |
+| 1 hour | 0.999 | 0.924 |
+| 1 day | 0.989 | 0.896 |
+| 7 days | 0.922 | 0.884 |
+| 30 days | 0.707 | 0.877 |
+| 60 days | 0.500 | 0.874 |
+| 90 days | 0.354 | 0.872 |
+| 120 days | 0.250 | 0.871 |
+| 180 days | 0.125 | 0.870 |
+| 1 year | 0.015 | 0.867 |
+
+L1 episodic weight drops by half every 60 days and is nearly zero after a year — old events naturally fade out. L2 semantic weight stays in a narrow band (0.87–0.98) regardless of age, so a fact stored a year ago still scores 87% of a freshly stored one. The only way semantic memories lose relevance is through contradiction-based updates, not time.
 
 ### Self-Maintenance
 
