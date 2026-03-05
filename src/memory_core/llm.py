@@ -20,12 +20,19 @@ def get_llm_complete():
     model = os.environ.get("CLICKMEM_LLM_MODEL", "gpt-4o-mini")
 
     def complete(prompt: str) -> str:
-        resp = litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=1024,
-        )
+        kwargs: dict = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        try:
+            kwargs["temperature"] = 0
+            kwargs["max_tokens"] = 1024
+            resp = litellm.completion(**kwargs)
+        except litellm.exceptions.BadRequestError:
+            kwargs.pop("temperature", None)
+            kwargs.pop("max_tokens", None)
+            kwargs["max_completion_tokens"] = 1024
+            resp = litellm.completion(**kwargs)
         return resp.choices[0].message.content.strip()
 
     return complete
