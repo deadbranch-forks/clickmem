@@ -36,8 +36,18 @@ ClickMem stores memories in [chDB](https://github.com/chdb-io/chdb) (embedded Cl
 Memories are found via **hybrid search** combining:
 1. **Vector similarity** — 256-dim cosine distance on Qwen3 embeddings
 2. **Keyword matching** — word-level hit rate on content and tags
-3. **Time decay** — exponential decay for episodic, recency boost for semantic
+3. **Time decay** — different strategies per layer (see below)
 4. **MMR diversity** — re-ranks to avoid returning redundant results
+
+### Time Decay Weights
+
+Different memory layers use fundamentally different decay strategies, reflecting their different roles:
+
+![Decay Weight Curves](docs/decay_weights.png)
+
+**L1 Episodic — Exponential Decay** (left): Events fade quickly over time, like human episodic memory. The half-life is 60 days — a 2-month-old event scores only 50% of a fresh one. At 120 days with zero access, entries are auto-cleaned. This is classic radioactive decay: `w = e^(-ln2/T * t)`.
+
+**L2 Semantic — Logarithmic Recency** (right): Long-term knowledge should almost never lose relevance just because it's old. The recency weight uses the Weber-Fechner law — human perception of time differences is logarithmic: the gap between "1 minute ago" and "2 minutes ago" feels significant, but "3 months ago" vs "4 months ago" feels nearly identical. The score maps to `[0.8, 1.0]`, acting as a mild tiebreaker rather than a dominant factor. Formula: `w = 0.8 + 0.2 / (1 + k * ln(1 + t/τ))`.
 
 ### Self-Maintenance
 
