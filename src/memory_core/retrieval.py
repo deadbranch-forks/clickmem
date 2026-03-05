@@ -51,6 +51,44 @@ def _keyword_score(content: str, tags: list[str], query_words: list[str]) -> flo
     return hits / len(query_words)
 
 
+def recency_score(
+    created_at: datetime | None,
+    tau: float = 60.0,
+    k: float = 0.15,
+) -> float:
+    """Compute a recency score in [0.8, 1.0] using logarithmic time decay.
+
+    Uses ``1 / (1 + k * ln(1 + age/tau))`` which has **high near-term
+    sensitivity** and **low far-term sensitivity** — matching how humans
+    perceive time differences (Weber-Fechner law):
+
+    - 1 min vs 2 min → noticeable difference (~0.009)
+    - 3 months vs 4 months → tiny difference (~0.001)
+    - Near/far sensitivity ratio ≈ 17×
+
+    The raw [0, 1] score is mapped to [0.8, 1.0] so recency is a mild
+    tiebreaker rather than the dominant factor.
+
+    Parameters
+    ----------
+    created_at : datetime or None
+        When the memory was created/updated.  None → returns 1.0 (max).
+    tau : float
+        Time granularity anchor in seconds.  Default 60 (= 1 minute).
+        Smaller → more sensitive to very short intervals.
+    k : float
+        Decay steepness.  Default 0.15 (gentle).
+    """
+    if created_at is None:
+        return 1.0
+    now = datetime.now(timezone.utc)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    age_seconds = max(0.0, (now - created_at).total_seconds())
+    raw = 1.0 / (1.0 + k * math.log1p(age_seconds / tau))
+    return 0.8 + 0.2 * raw
+
+
 def _tokenize_query(query: str) -> list[str]:
     """Split query into searchable words."""
     return [w for w in re.split(r"\s+", query.strip()) if w]
@@ -117,6 +155,11 @@ def hybrid_search(
         if c["layer"] == "episodic":
             decay = _time_decay(c["created_at"], cfg.decay_days)
             base_score *= decay
+        elif c["layer"] == "semantic":
+            # Log-based recency boost for semantic: high near-term sensitivity
+            # (1min vs 2min ≈ 0.009 diff) but low far-term sensitivity
+            # (3mo vs 4mo ≈ 0.001 diff). Range [0.8, 1.0].
+            base_score *= recency_score(c["created_at"])
 
         c["_vec_score"] = vec_score
         c["_base_score"] = base_score

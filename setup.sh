@@ -91,33 +91,43 @@ else
     echo "▸ No ~/.openclaw directory found, skipping history import."
 fi
 
-# ── 5. Install OpenClaw hook ──────────────────────────────────────────
+# ── 5. Install OpenClaw plugin ─────────────────────────────────────────
 
 OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
+
 if [ -f "$OPENCLAW_CONFIG" ]; then
-    echo "▸ Installing OpenClaw hook..."
-    # OpenClaw's loadHooksFromDir scans subdirectories of extraDirs entries,
-    # so we add the project root (which contains clickmem-hook/ subdirectory).
+    echo "▸ Installing OpenClaw plugin..."
     python3 -c "
-import json, sys
+import json
 cfg_path = '$OPENCLAW_CONFIG'
-project_dir = '$SCRIPT_DIR'
+plugin_dir = '$SCRIPT_DIR/clickmem-plugin'
 with open(cfg_path) as f:
     cfg = json.load(f)
-hooks = cfg.setdefault('hooks', {}).setdefault('internal', {})
-hooks['enabled'] = True
-load = hooks.setdefault('load', {})
-extra = load.setdefault('extraDirs', [])
-if project_dir not in extra:
-    extra.append(project_dir)
-entries = hooks.setdefault('entries', {})
-entries.setdefault('clickmem-hook', {'enabled': True})
+plugins = cfg.setdefault('plugins', {})
+# Add plugin load path for discovery
+load = plugins.setdefault('load', {})
+paths = load.setdefault('paths', [])
+if plugin_dir not in paths:
+    paths.append(plugin_dir)
+# Enable plugin entry
+entries = plugins.setdefault('entries', {})
+entries['clickmem'] = {'enabled': True}
+# Set as memory slot
+slots = plugins.setdefault('slots', {})
+slots['memory'] = 'clickmem'
+# Clean up old hook references if present
+hooks = cfg.get('hooks', {}).get('internal', {})
+hooks.get('entries', {}).pop('clickmem-hook', None)
+hooks.get('installs', {}).pop('clickmem-hook', None)
+hook_extra = hooks.get('load', {}).get('extraDirs', [])
+if hook_extra:
+    hooks['load']['extraDirs'] = [d for d in hook_extra if 'clickmem' not in d]
 with open(cfg_path, 'w') as f:
     json.dump(cfg, f, indent=2)
-print('  Hook registered in', cfg_path)
-" || echo "  Warning: failed to register hook"
+print('  Plugin registered in', cfg_path)
+" || echo "  Warning: failed to register plugin"
 else
-    echo "▸ No ~/.openclaw/openclaw.json found, skipping hook installation."
+    echo "▸ No ~/.openclaw/openclaw.json found, skipping plugin installation."
 fi
 
 # ── 6. Install skill (slash command) ─────────────────────────────────

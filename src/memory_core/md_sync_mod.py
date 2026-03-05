@@ -26,8 +26,8 @@ class md_sync:
     ) -> str:
         """Format L2 semantic memories as markdown string.
 
-        Memories are sorted by recency (newest first) and truncated
-        to max_items entries or max_chars total length.
+        Memories are scored with a recency factor (newer = higher score)
+        and sorted by score descending, then truncated to max_items/max_chars.
         """
         memories = db.list_by_layer("semantic", limit=max_items)
         # list_by_layer already returns ORDER BY created_at DESC
@@ -36,18 +36,28 @@ class md_sync:
         for m in memories:
             by_category[m.category].append(m)
 
-        lines = ["# Semantic Memory\n"]
+        lines = [
+            "# Semantic Memory\n",
+            "\n> If memories conflict, prefer entries listed earlier (higher scored).\n",
+        ]
         if not by_category:
             lines.append("_No semantic memories yet._\n")
         else:
-            total_chars = len(lines[0])
+            total_chars = sum(len(l) for l in lines)
             item_count = 0
             for cat in sorted(by_category.keys()):
                 header = f"\n## [{cat}]\n"
                 lines.append(header)
                 total_chars += len(header)
-                # Sort by recency within category (newest first), then content for stability
-                sorted_mems = sorted(by_category[cat], key=lambda x: x.content)
+                # Sort by recency (newer = higher score), with content as
+                # tiebreaker. Using timestamp directly since recency_score is
+                # monotonic — same ordering, but deterministic across calls.
+                _epoch = datetime.min.replace(tzinfo=timezone.utc)
+                sorted_mems = sorted(
+                    by_category[cat],
+                    key=lambda x: (x.updated_at or x.created_at or _epoch, x.content),
+                    reverse=True,
+                )
                 for i, m in enumerate(sorted_mems):
                     entry = f"- {m.content}\n"
                     if i < len(sorted_mems) - 1:
