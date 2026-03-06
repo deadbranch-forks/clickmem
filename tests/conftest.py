@@ -104,11 +104,21 @@ def retrieval_config():
 
 @pytest.fixture(autouse=True)
 def _reset_factory():
-    """Reset the MemoryFactory counter and CLI singleton between tests."""
+    """Reset the MemoryFactory counter and CLI/transport singletons between tests."""
     MemoryFactory.reset()
-    # Reset CLI db singleton so each test gets clean state
+    # Reset CLI singletons so each test gets clean state
     import memory_core.cli as cli_mod
     cli_mod._db_instance = None
+    cli_mod._transport_instance = None
+    cli_mod._remote_url = None
+    cli_mod._remote_api_key = None
+    # Reset server transport singleton
+    import memory_core.server as server_mod
+    server_mod._transport = None
+    server_mod._api_key_env = None
+    server_mod._debug_mode = False
     yield
     MemoryFactory.reset()
     cli_mod._db_instance = None
+    cli_mod._transport_instance = None
+    server_mod._transport = None

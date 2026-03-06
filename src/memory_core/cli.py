@@ -111,6 +111,8 @@ def remember(
 
     if json_output:
         typer.echo(json.dumps(result, default=str))
+    elif layer == "working":
+        console.print(f"[green]✓[/green] Working memory updated.")
     else:
         action = result.get("action", "ADD")
         if action in ("ADD", "FALLBACK_ADD"):
