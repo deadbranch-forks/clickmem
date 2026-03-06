@@ -63,15 +63,17 @@ class TestGetLLMInfo:
 class TestGetLLMCompleteLocalMode:
     def test_local_mode_returns_none_when_unavailable(self):
         with patch.dict(os.environ, {"CLICKMEM_LLM_MODE": "local"}):
-            result = get_llm_complete()
-            assert result is None
+            with patch("memory_core.llm._get_local_complete", return_value=None):
+                result = get_llm_complete()
+                assert result is None
 
     def test_local_mode_caches_failure(self):
         with patch.dict(os.environ, {"CLICKMEM_LLM_MODE": "local"}):
-            get_llm_complete()
-            assert llm_mod._local_engine_failed is True
-            result = get_llm_complete()
-            assert result is None
+            with patch("memory_core.local_llm.LocalLLMEngine", side_effect=RuntimeError("no model")):
+                get_llm_complete()
+                assert llm_mod._local_engine_failed is True
+                result = get_llm_complete()
+                assert result is None
 
     def test_local_mode_returns_engine_when_available(self):
         mock_engine = MagicMock()
