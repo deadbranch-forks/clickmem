@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -27,13 +28,11 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at DateTime64(3, 'UTC'),
     updated_at DateTime64(3, 'UTC'),
     accessed_at DateTime64(3, 'UTC')
-) ENGINE = MergeTree()
+) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (id)
 """
 
-# chDB limitation: only one persistent path per process.
-# We maintain a singleton session for persistent paths, and allow
-# multiple in-memory sessions (which don't conflict).
+_session_lock = threading.Lock()
 _persistent_session: chdb_session.Session | None = None
 _persistent_path: str | None = None
 
@@ -50,20 +49,25 @@ def _get_session(db_path: str) -> chdb_session.Session:
     if db_path in (":memory:", "", None):
         return chdb_session.Session()
 
-    if _persistent_session is not None:
-        if _persistent_path == db_path:
-            return _persistent_session
-        # Different persistent path requested — chDB limitation
-        # Fall back to in-memory to avoid RuntimeError
-        return chdb_session.Session()
+    with _session_lock:
+        if _persistent_session is not None:
+            if _persistent_path == db_path:
+                return _persistent_session
+            return chdb_session.Session()
 
-    _persistent_session = chdb_session.Session(db_path)
-    _persistent_path = db_path
-    return _persistent_session
+        _persistent_session = chdb_session.Session(db_path)
+        _persistent_path = db_path
+        return _persistent_session
 
 
 class MemoryDB:
-    """Persistent memory storage backed by chDB."""
+    """Persistent memory storage backed by chDB.
+
+    Uses ReplacingMergeTree(updated_at) so that row-level updates are
+    performed as INSERT (append) instead of ALTER TABLE UPDATE mutations.
+    All SELECTs use FINAL to see the latest version of each row.
+    This eliminates mutation locks and OPTIMIZE TABLE FINAL from hot paths.
+    """
 
     def __init__(self, db_path: str = ":memory:"):
         self._session = _get_session(db_path)
@@ -126,28 +130,33 @@ class MemoryDB:
     # -- L0 Working --------------------------------------------------------
 
     def set_working(self, content: str, **kwargs) -> str:
-        now = self._now_str()
-        # Deactivate all existing working memories
-        self._session.query(
-            f"ALTER TABLE memories UPDATE is_active = 0, updated_at = '{now}' "
-            f"WHERE layer = 'working' AND is_active = 1"
-        )
-        self._session.query("OPTIMIZE TABLE memories FINAL")
+        now_dt = datetime.now(timezone.utc)
 
-        mid = str(uuid.uuid4())
-        esc_content = self._escape(content)
-        self._session.query(
-            f"INSERT INTO memories (id, layer, category, content, tags, entities, "
-            f"embedding, session_id, source, is_active, access_count, "
-            f"created_at, updated_at, accessed_at) VALUES "
-            f"('{mid}', 'working', 'knowledge', '{esc_content}', [], [], "
-            f"[], '', 'agent', 1, 0, '{now}', '{now}', '{now}')"
+        old_rows = self._query_json(
+            "SELECT * FROM memories FINAL "
+            "WHERE layer = 'working' AND is_active = 1"
         )
-        return mid
+        for row in old_rows:
+            old = self._row_to_memory(row)
+            old.is_active = False
+            old.updated_at = now_dt
+            self.insert(old)
+
+        m = Memory(
+            content=content,
+            layer="working",
+            category="knowledge",
+            is_active=True,
+            created_at=now_dt,
+            updated_at=now_dt,
+            accessed_at=now_dt,
+        )
+        self.insert(m)
+        return m.id
 
     def get_working(self) -> str | None:
         rows = self._query_json(
-            "SELECT content FROM memories "
+            "SELECT content FROM memories FINAL "
             "WHERE layer = 'working' AND is_active = 1 "
             "ORDER BY created_at DESC LIMIT 1"
         )
@@ -185,8 +194,8 @@ class MemoryDB:
 
     def get(self, memory_id: str) -> Memory | None:
         rows = self._query_json(
-            f"SELECT * FROM memories WHERE id = '{self._escape(memory_id)}' "
-            f"ORDER BY updated_at DESC LIMIT 1"
+            f"SELECT * FROM memories FINAL WHERE id = '{self._escape(memory_id)}' "
+            f"LIMIT 1"
         )
         if not rows:
             return None
@@ -197,11 +206,12 @@ class MemoryDB:
         if old is None:
             raise ValueError(f"Memory {memory_id} not found")
 
-        # Deactivate old
-        self.deactivate(memory_id)
-
-        # Create new version
         now = datetime.now(timezone.utc)
+
+        old.is_active = False
+        old.updated_at = now
+        self.insert(old)
+
         new_memory = Memory(
             content=new_content,
             layer=old.layer,
@@ -220,25 +230,34 @@ class MemoryDB:
         self.insert(new_memory)
         return new_memory.id
 
+    def update_embedding(self, memory_id: str, embedding: list[float]) -> None:
+        """Update the embedding of a memory by inserting a new version."""
+        existing = self.get(memory_id)
+        if existing is None:
+            return
+        existing.embedding = embedding
+        existing.updated_at = datetime.now(timezone.utc)
+        self.insert(existing)
+
     def touch(self, memory_id: str) -> None:
         """Bump access_count and accessed_at for a memory."""
-        now = self._now_str()
-        self._session.query(
-            f"ALTER TABLE memories UPDATE access_count = access_count + 1, "
-            f"accessed_at = '{now}' "
-            f"WHERE id = '{self._escape(memory_id)}' AND is_active = 1"
-        )
+        existing = self.get(memory_id)
+        if existing is None or not existing.is_active:
+            return
+        now = datetime.now(timezone.utc)
+        existing.access_count += 1
+        existing.accessed_at = now
+        existing.updated_at = now
+        self.insert(existing)
 
     def deactivate(self, memory_id: str) -> bool:
         existing = self.get(memory_id)
         if existing is None:
             return False
-        now = self._now_str()
-        self._session.query(
-            f"ALTER TABLE memories UPDATE is_active = 0, updated_at = '{now}' "
-            f"WHERE id = '{self._escape(memory_id)}'"
-        )
-        self._session.query("OPTIMIZE TABLE memories FINAL")
+        now = datetime.now(timezone.utc)
+        existing.is_active = False
+        existing.updated_at = now
+        self.insert(existing)
         return True
 
     def delete(self, memory_id: str) -> bool:
@@ -251,25 +270,52 @@ class MemoryDB:
         self._session.query("OPTIMIZE TABLE memories FINAL")
         return True
 
+    def optimize(self) -> None:
+        """Force merge of all parts — call during maintenance, not in hot paths."""
+        self._session.query("OPTIMIZE TABLE memories FINAL")
+
     # -- Queries -----------------------------------------------------------
 
     def list_by_layer(self, layer: str, *, limit: int = 100) -> list[Memory]:
         rows = self._query_json(
-            f"SELECT * FROM memories "
+            f"SELECT * FROM memories FINAL "
             f"WHERE layer = '{self._escape(layer)}' AND is_active = 1 "
             f"ORDER BY created_at DESC LIMIT {limit}"
         )
         return [self._row_to_memory(r) for r in rows]
 
+    def search_by_vector(
+        self,
+        query_vec: list[float],
+        layer: str,
+        *,
+        limit: int = 200,
+    ) -> list[Memory]:
+        """Pre-filter candidates by cosineDistance at the SQL level.
+
+        Much more efficient than loading all rows into Python — ClickHouse
+        computes the distance over the full table and returns only the
+        closest ``limit`` rows.
+        """
+        vec_literal = self._float_array_literal(query_vec)
+        rows = self._query_json(
+            f"SELECT *, cosineDistance(embedding, {vec_literal}) AS _dist "
+            f"FROM memories FINAL "
+            f"WHERE layer = '{self._escape(layer)}' AND is_active = 1 "
+            f"AND length(embedding) > 0 "
+            f"ORDER BY _dist ASC LIMIT {limit}"
+        )
+        return [self._row_to_memory(r) for r in rows]
+
     def count(self) -> int:
         rows = self._query_json(
-            "SELECT count() as cnt FROM memories WHERE is_active = 1"
+            "SELECT count() as cnt FROM memories FINAL WHERE is_active = 1"
         )
         return int(rows[0]["cnt"]) if rows else 0
 
     def count_by_layer(self) -> dict[str, int]:
         rows = self._query_json(
-            "SELECT layer, count() as cnt FROM memories "
+            "SELECT layer, count() as cnt FROM memories FINAL "
             "WHERE is_active = 1 GROUP BY layer"
         )
         result = {"working": 0, "episodic": 0, "semantic": 0}
@@ -279,7 +325,7 @@ class MemoryDB:
 
     def stats(self) -> dict:
         rows = self._query_json(
-            "SELECT layer, category, count() as cnt FROM memories "
+            "SELECT layer, category, count() as cnt FROM memories FINAL "
             "WHERE is_active = 1 GROUP BY layer, category ORDER BY layer, category"
         )
         result: dict = {}
@@ -294,14 +340,14 @@ class MemoryDB:
     def find_by_tags(self, tags: list[str]) -> list[Memory]:
         tags_lit = self._array_literal(tags)
         rows = self._query_json(
-            f"SELECT * FROM memories "
+            f"SELECT * FROM memories FINAL "
             f"WHERE hasAny(tags, {tags_lit}) AND is_active = 1"
         )
         return [self._row_to_memory(r) for r in rows]
 
     def find_stale_episodic(self, decay_days: int = 120) -> list[Memory]:
         rows = self._query_json(
-            f"SELECT * FROM memories "
+            f"SELECT * FROM memories FINAL "
             f"WHERE layer = 'episodic' AND is_active = 1 "
             f"AND access_count = 0 "
             f"AND accessed_at < now() - INTERVAL {decay_days} DAY"
@@ -310,7 +356,7 @@ class MemoryDB:
 
     def find_deleted(self, days: int = 7) -> list[Memory]:
         rows = self._query_json(
-            f"SELECT * FROM memories "
+            f"SELECT * FROM memories FINAL "
             f"WHERE is_active = 0 "
             f"AND updated_at < now() - INTERVAL {days} DAY"
         )
@@ -319,7 +365,7 @@ class MemoryDB:
     def get_episodic_by_month(self, month: str) -> list[Memory]:
         # month format: "2026-01"
         rows = self._query_json(
-            f"SELECT * FROM memories "
+            f"SELECT * FROM memories FINAL "
             f"WHERE layer = 'episodic' AND is_active = 1 "
             f"AND formatDateTime(created_at, '%Y-%m') = '{self._escape(month)}' "
             f"ORDER BY created_at"
@@ -329,7 +375,7 @@ class MemoryDB:
     def get_tag_frequencies(self, layer: str = "episodic", min_count: int = 3) -> dict[str, int]:
         rows = self._query_json(
             f"SELECT tag, count() as cnt FROM ("
-            f"  SELECT arrayJoin(tags) as tag FROM memories "
+            f"  SELECT arrayJoin(tags) as tag FROM memories FINAL "
             f"  WHERE layer = '{self._escape(layer)}' AND is_active = 1"
             f") GROUP BY tag HAVING cnt >= {min_count} ORDER BY cnt DESC"
         )

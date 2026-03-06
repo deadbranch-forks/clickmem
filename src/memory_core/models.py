@@ -41,5 +41,6 @@ class RetrievalConfig:
     w_keyword: float = 0.5
     decay_days: float = 60.0
     mmr_lambda: float = 0.7
+    semantic_boost: float = 1.3
     layer: Optional[str] = None  # filter by layer; None = all applicable
     category: Optional[str] = None  # filter by category; None = all
