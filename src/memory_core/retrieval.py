@@ -37,20 +37,39 @@ def _time_decay(created_at: datetime | None, half_life_days: float) -> float:
     return math.exp(-math.log(2) * age_days / half_life_days)
 
 
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "what", "who", "where", "when", "how", "why", "which", "that", "this",
+    "it", "its", "in", "on", "at", "to", "for", "of", "with", "by", "from",
+    "do", "does", "did", "have", "has", "had", "can", "could", "will",
+    "would", "shall", "should", "may", "might", "and", "or", "but", "not",
+    "no", "so", "if", "then", "than", "about", "into", "over", "after",
+    "i", "me", "my", "we", "our", "you", "your", "he", "she", "they",
+    "的", "是", "了", "在", "吗", "什么", "怎么", "哪", "那", "这",
+})
+
+
 def _keyword_score(content: str, tags: list[str], query_words: list[str],
                    entities: list[str] | None = None) -> float:
-    """Keyword matching score over content, tags, and entities. Returns [0, 1]."""
-    if not query_words:
+    """Keyword matching score over content, tags, and entities. Returns [0, 1].
+
+    Stop words are excluded so that queries like "what is amynote" score
+    primarily on the meaningful term "amynote" rather than ubiquitous words.
+    """
+    meaningful = [w for w in query_words if w.lower() not in _STOP_WORDS]
+    if not meaningful:
+        meaningful = query_words
+    if not meaningful:
         return 0.0
     content_lower = content.lower()
     tag_set = {t.lower() for t in tags}
     entity_set = {e.lower() for e in (entities or [])}
     hits = 0
-    for w in query_words:
+    for w in meaningful:
         wl = w.lower()
         if wl in content_lower or wl in tag_set or wl in entity_set:
             hits += 1
-    return hits / len(query_words)
+    return hits / len(meaningful)
 
 
 def _popularity_boost(access_count: int) -> float:
@@ -208,8 +227,15 @@ def _apply_mmr(
     candidates: list[dict],
     mmr_lambda: float,
     top_k: int,
+    dedup_threshold: float = 0.92,
 ) -> list[dict]:
-    """Apply Maximal Marginal Relevance to select diverse results."""
+    """Apply MMR with aggressive near-duplicate suppression.
+
+    Any candidate whose embedding cosine similarity to an already-selected
+    item exceeds ``dedup_threshold`` is silently dropped (not just penalized).
+    This prevents N copies of the same cron-job / repeated content from
+    monopolizing the result set.
+    """
     if not candidates:
         return []
 
@@ -223,13 +249,19 @@ def _apply_mmr(
         for i, cand in enumerate(remaining):
             relevance = cand["_base_score"]
 
-            # Max similarity to already selected items
             max_sim = 0.0
+            is_duplicate = False
             if selected and cand.get("embedding"):
                 for s in selected:
                     if s.get("embedding"):
                         sim = _cosine_similarity(cand["embedding"], s["embedding"])
+                        if sim > dedup_threshold:
+                            is_duplicate = True
+                            break
                         max_sim = max(max_sim, sim)
+
+            if is_duplicate:
+                continue
 
             mmr_score = mmr_lambda * relevance - (1.0 - mmr_lambda) * max_sim
             if mmr_score > best_mmr:
@@ -237,12 +269,12 @@ def _apply_mmr(
                 best_idx = i
 
         if best_idx < 0:
+            # All remaining candidates are duplicates — done
             break
 
         winner = remaining.pop(best_idx)
-        winner["_final_score"] = winner["_base_score"]  # final score is base score
+        winner["_final_score"] = winner["_base_score"]
         selected.append(winner)
 
-    # Re-sort selected by final_score descending
     selected.sort(key=lambda c: c["_final_score"], reverse=True)
     return selected

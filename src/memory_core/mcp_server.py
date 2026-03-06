@@ -56,6 +56,7 @@ async def list_tools() -> list[Tool]:
                     "min_score": {"type": "number", "description": "Minimum score threshold (default: 0.0)", "default": 0.0},
                     "layer": {"type": "string", "description": "Filter by layer: episodic, semantic, or null for all", "enum": ["episodic", "semantic"]},
                     "category": {"type": "string", "description": "Filter by category"},
+                    "max_content_length": {"type": "integer", "description": "Truncate content to this many chars (default: 800, 0=no limit)", "default": 800},
                 },
                 "required": ["query"],
             },
@@ -135,10 +136,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         )
         if not results:
             return [TextContent(type="text", text="No matching memories found.")]
+        max_len = arguments.get("max_content_length", 800)
         lines = []
         for r in results:
             score = r.get("final_score", 0)
-            lines.append(f"[{r['layer']}/{r.get('category', '')}] (score={score:.2f}) {r['content']}")
+            content = r["content"]
+            if max_len and len(content) > max_len:
+                content = content[:max_len] + "… [truncated]"
+            lines.append(f"[{r['layer']}/{r.get('category', '')}] (score={score:.2f}) {content}")
         return [TextContent(type="text", text="\n".join(lines))]
 
     if name == "clickmem_remember":
@@ -229,30 +234,32 @@ async def run_stdio():
 
 async def run_sse(host: str = "0.0.0.0", port: int = 9528):
     """Run MCP server over SSE (for LAN remote Cursor / Claude Code)."""
-    from starlette.applications import Starlette
-    from starlette.routing import Mount, Route
     from mcp.server.sse import SseServerTransport
 
     sse_transport = SseServerTransport("/messages/")
+    init_options = server.create_initialization_options()
 
-    async def handle_sse(request):
-        async with sse_transport.connect_sse(
-            request.scope, request.receive, request._send
-        ) as streams:
-            await server.run(
-                streams[0], streams[1],
-                server.create_initialization_options(),
-            )
+    async def handle_sse(scope, receive, send):
+        async with sse_transport.connect_sse(scope, receive, send) as streams:
+            await server.run(streams[0], streams[1], init_options)
 
-    starlette_app = Starlette(
-        routes=[
-            Route("/sse", endpoint=handle_sse),
-            Mount("/messages/", app=sse_transport.handle_post_message),
-        ],
-    )
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            while True:
+                msg = await receive()
+                if msg["type"] == "lifespan.startup":
+                    await send({"type": "lifespan.startup.complete"})
+                elif msg["type"] == "lifespan.shutdown":
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
+        path = scope.get("path", "")
+        if path.startswith("/messages"):
+            await sse_transport.handle_post_message(scope, receive, send)
+        else:
+            await handle_sse(scope, receive, send)
 
     import uvicorn
-    config = uvicorn.Config(starlette_app, host=host, port=port, log_level="info")
+    config = uvicorn.Config(app, host=host, port=port, log_level="info")
     srv = uvicorn.Server(config)
     await srv.serve()
 

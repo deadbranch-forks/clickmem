@@ -11,6 +11,7 @@ from memory_core.models import Memory, RetrievalConfig
 from memory_core.retrieval import hybrid_search
 
 SIMILARITY_THRESHOLD = 0.5
+EPISODIC_DEDUP_THRESHOLD = 0.95
 
 UPSERT_PROMPT_TEMPLATE = """\
 Decide how to handle a new memory given existing similar memories.
@@ -77,11 +78,18 @@ def upsert(
     4. Similar results + LLM → LLM decides UPDATE/DELETE/ADD
     5. Similar results + no LLM → fallback INSERT
     """
-    # Episodic memories are raw logs — never deduplicate
+    # Episodic: skip insert if a near-identical memory already exists
     if layer == "episodic":
+        new_embedding = emb.encode_document(content)
+        cfg_ep = RetrievalConfig(top_k=3, layer="episodic")
+        existing = hybrid_search(db, emb, content, cfg=cfg_ep)
+        for ex in existing:
+            if ex.get("final_score", 0) > EPISODIC_DEDUP_THRESHOLD:
+                db.touch(ex["id"])
+                return UpsertResult(added_id=None, action="NOOP")
         m = Memory(
             content=content, layer=layer, category=category, tags=tags,
-            embedding=emb.encode_document(content), source="cli",
+            embedding=new_embedding, source="cli",
         )
         db.insert(m)
         return UpsertResult(added_id=m.id, action="ADD")
