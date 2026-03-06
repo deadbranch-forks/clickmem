@@ -14,13 +14,12 @@ AI coding assistants (Claude Code, Cursor, OpenClaw, etc.) forget everything bet
      │MCP          │MCP          │MCP/HTTP          │HTTP
      │             │             │                  │
 ┌────▼─────────────▼─────────────▼──────────────────▼──────────┐
-│                   ClickMem Server                             │
-│  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────┐ │
-│  │ MCP Server  │  │ REST API    │  │  mDNS Discovery      │ │
-│  │ stdio / SSE │  │ HTTP/JSON   │  │  _clickmem._tcp      │ │
-│  └──────┬──────┘  └──────┬──────┘  └──────────────────────┘ │
-│         └────────┬───────┘                                    │
-│          ┌───────▼───────────────────────────────────────┐   │
+│                ClickMem Server  (single port)                 │
+│  ┌───────────────────────────┐  ┌──────────────────────────┐ │
+│  │ /v1/*  REST API (JSON)    │  │  mDNS Discovery          │ │
+│  │ /sse   MCP SSE connection │  │  _clickmem._tcp          │ │
+│  └─────────────┬─────────────┘  └──────────────────────────┘ │
+│          ┌─────▼─────────────────────────────────────────┐   │
 │          │  memory_core — chDB + Qwen3 embeddings        │   │
 │          │  hybrid search · LLM upsert · auto-maintain   │   │
 │          └───────────────────────────────────────────────┘   │
@@ -177,22 +176,25 @@ All commands support `--json` for machine-readable output.
 
 ### Server — LAN Memory Sharing
 
-Start the REST API server so all tools on your network share the same memory:
+Start the server so all tools on your network share the same memory. A single process serves **both** the REST API and MCP SSE on one port:
 
 ```bash
 # Generate an API key
 memory serve --gen-key
 # → Generated API key: a1b2c3d4e5f6...
 
-# Start server (LAN-accessible)
+# Start server (LAN-accessible, REST + MCP SSE on one port)
 export CLICKMEM_API_KEY=a1b2c3d4e5f6...
 memory serve --host 0.0.0.0 --port 9527
+
+# REST-only (disable MCP SSE)
+memory serve --host 0.0.0.0 --no-mcp
 
 # Enable SQL endpoint for debugging
 memory serve --host 0.0.0.0 --debug
 ```
 
-**REST API endpoints:**
+**Endpoints (all on the same port):**
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -205,6 +207,8 @@ memory serve --host 0.0.0.0 --debug
 | `GET` | `/v1/status` | Layer statistics |
 | `POST` | `/v1/maintain` | Run maintenance |
 | `POST` | `/v1/sql` | Raw SQL (debug mode only) |
+| `GET` | `/sse` | MCP SSE connection |
+| `POST` | `/messages/` | MCP message posting |
 
 ### Remote CLI
 
@@ -230,13 +234,15 @@ ClickMem speaks [MCP (Model Context Protocol)](https://modelcontextprotocol.io/)
 **Local (stdio) — best for same-machine use:**
 
 ```bash
-memory mcp --transport stdio
+memory mcp
 ```
 
-**Remote (SSE) — best for LAN sharing:**
+**Remote (SSE) — built into `memory serve`:** No separate command needed. `memory serve` exposes MCP SSE at `/sse` on the same port as the REST API.
 
 ```bash
-memory mcp --transport sse --host 0.0.0.0 --port 9528
+memory serve --host 0.0.0.0 --port 9527
+# REST API → http://host:9527/v1/...
+# MCP SSE  → http://host:9527/sse
 ```
 
 #### Claude Code Configuration
@@ -254,13 +260,13 @@ Add to `~/.claude.json` or project `.mcp.json`:
 }
 ```
 
-For remote (another machine's ClickMem):
+For remote (another machine running `memory serve`):
 
 ```json
 {
   "mcpServers": {
     "clickmem": {
-      "url": "http://192.168.1.100:9528/sse"
+      "url": "http://192.168.1.100:9527/sse"
     }
   }
 }
@@ -287,7 +293,7 @@ For remote:
 {
   "mcpServers": {
     "clickmem": {
-      "url": "http://192.168.1.100:9528/sse"
+      "url": "http://192.168.1.100:9527/sse"
     }
   }
 }
