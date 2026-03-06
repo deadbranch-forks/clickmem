@@ -1,12 +1,37 @@
 # ClickMem
 
-**Local long-term memory for AI coding agents.**
+**Unified memory center for AI coding agents — local-first, LAN-shareable.**
 
-AI coding assistants (OpenClaw, Claude Code, etc.) forget everything between sessions. Context compaction discards the preferences you stated, the decisions you made, the names you mentioned. ClickMem gives your agent persistent, searchable memory that runs entirely on your machine — no API keys, no cloud calls, no data leaving your laptop.
+AI coding assistants (Claude Code, Cursor, OpenClaw, etc.) forget everything between sessions. Context compaction discards the preferences you stated, the decisions you made, the names you mentioned. ClickMem gives your agents persistent, searchable memory that runs on your machine and can be shared across all your tools via a single server on the local network.
+
+## Architecture
+
+```
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐
+│ Claude   │  │ Cursor   │  │ OpenClaw │  │ CLI (any machine)│
+│ Code     │  │          │  │          │  │                  │
+└────┬─────┘  └────┬─────┘  └────┬─────┘  └────────┬─────────┘
+     │MCP          │MCP          │MCP/HTTP          │HTTP
+     │             │             │                  │
+┌────▼─────────────▼─────────────▼──────────────────▼──────────┐
+│                   ClickMem Server                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────┐ │
+│  │ MCP Server  │  │ REST API    │  │  mDNS Discovery      │ │
+│  │ stdio / SSE │  │ HTTP/JSON   │  │  _clickmem._tcp      │ │
+│  └──────┬──────┘  └──────┬──────┘  └──────────────────────┘ │
+│         └────────┬───────┘                                    │
+│          ┌───────▼───────────────────────────────────────┐   │
+│          │  memory_core — chDB + Qwen3 embeddings        │   │
+│          │  hybrid search · LLM upsert · auto-maintain   │   │
+│          └───────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**One server, all your tools.** Start `memory serve` on any machine and every Claude Code session, Cursor workspace, and OpenClaw agent on the LAN shares the same memory — preferences learned once are recalled everywhere.
 
 ## How It Works
 
-ClickMem stores memories in [chDB](https://github.com/chdb-io/chdb) (embedded ClickHouse — a full analytical database running in-process, no server needed) and generates vector embeddings locally with [Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B). When your agent starts a conversation, ClickMem automatically recalls relevant memories and injects them into context. When a conversation ends, it captures important information for later.
+ClickMem stores memories in [chDB](https://github.com/chdb-io/chdb) (embedded ClickHouse — a full analytical database running in-process) and generates vector embeddings locally with [Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B). When your agent starts a conversation, ClickMem automatically recalls relevant memories. When a conversation ends, it captures important information for later.
 
 ### Three-Layer Memory Model
 
@@ -35,9 +60,10 @@ ClickMem stores memories in [chDB](https://github.com/chdb-io/chdb) (embedded Cl
 
 Memories are found via **hybrid search** combining:
 1. **Vector similarity** — 256-dim cosine distance on Qwen3 embeddings
-2. **Keyword matching** — word-level hit rate on content and tags
+2. **Keyword matching** — word-level hit rate on content, tags, and entities
 3. **Time decay** — different strategies per layer (see below)
-4. **MMR diversity** — re-ranks to avoid returning redundant results
+4. **Popularity boost** — frequently recalled memories score higher
+5. **MMR diversity** — re-ranks to avoid returning redundant results
 
 ### Time Decay Weights
 
@@ -78,16 +104,17 @@ ClickMem maintains itself automatically:
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/auxten/clickmem/main/setup.sh | bash
-```
-
-Or clone manually:
-
-```bash
 git clone https://github.com/auxten/clickmem && cd clickmem && ./setup.sh
 ```
 
 > Set `CLICKMEM_DIR` to customize the install path (default: `~/clickmem`).
+
+For server/MCP features, install the server extras:
+
+```bash
+pip install -e ".[server]"    # REST API + MCP + mDNS
+pip install -e ".[all]"       # server + LLM support
+```
 
 **What `setup.sh` does:**
 1. Checks Python >= 3.10 and `uv`
@@ -100,6 +127,8 @@ git clone https://github.com/auxten/clickmem && cd clickmem && ./setup.sh
 **Resource usage:** ~500 MB RAM for the embedding model, ~200 MB disk for chDB data (grows with memory count).
 
 ## Usage
+
+### CLI — Basic Memory Operations
 
 ```bash
 # Store a memory
@@ -129,6 +158,145 @@ memory export-context /path/to/workspace
 
 All commands support `--json` for machine-readable output.
 
+### Server — LAN Memory Sharing
+
+Start the REST API server so all tools on your network share the same memory:
+
+```bash
+# Generate an API key
+memory serve --gen-key
+# → Generated API key: a1b2c3d4e5f6...
+
+# Start server (LAN-accessible)
+export CLICKMEM_API_KEY=a1b2c3d4e5f6...
+memory serve --host 0.0.0.0 --port 9527
+
+# Enable SQL endpoint for debugging
+memory serve --host 0.0.0.0 --debug
+```
+
+**REST API endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/health` | Health check (no auth) |
+| `POST` | `/v1/recall` | Search memories |
+| `POST` | `/v1/remember` | Store a memory |
+| `POST` | `/v1/extract` | LLM-extract memories from text |
+| `DELETE` | `/v1/forget/{id}` | Delete a memory |
+| `GET` | `/v1/review` | List memories by layer |
+| `GET` | `/v1/status` | Layer statistics |
+| `POST` | `/v1/maintain` | Run maintenance |
+| `POST` | `/v1/sql` | Raw SQL (debug mode only) |
+
+### Remote CLI
+
+Use any `memory` command against a remote server:
+
+```bash
+# Via flags
+memory recall "project architecture" --remote http://192.168.1.100:9527 --api-key xxx
+
+# Via environment variables
+export CLICKMEM_REMOTE=http://192.168.1.100:9527
+export CLICKMEM_API_KEY=xxx
+memory recall "project architecture"
+
+# Auto-discover server on LAN via mDNS
+memory recall "project architecture" --remote auto
+```
+
+### MCP Server — Claude Code & Cursor Integration
+
+ClickMem speaks [MCP (Model Context Protocol)](https://modelcontextprotocol.io/), so Claude Code and Cursor can use it natively as a tool provider.
+
+**Local (stdio) — best for same-machine use:**
+
+```bash
+memory mcp --transport stdio
+```
+
+**Remote (SSE) — best for LAN sharing:**
+
+```bash
+memory mcp --transport sse --host 0.0.0.0 --port 9528
+```
+
+#### Claude Code Configuration
+
+Add to `~/.claude.json` or project `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "clickmem": {
+      "command": "clickmem-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+For remote (another machine's ClickMem):
+
+```json
+{
+  "mcpServers": {
+    "clickmem": {
+      "url": "http://192.168.1.100:9528/sse"
+    }
+  }
+}
+```
+
+#### Cursor Configuration
+
+Add to `.cursor/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "clickmem": {
+      "command": "clickmem-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+For remote:
+
+```json
+{
+  "mcpServers": {
+    "clickmem": {
+      "url": "http://192.168.1.100:9528/sse"
+    }
+  }
+}
+```
+
+**MCP Tools available to agents:**
+
+| Tool | Description |
+|------|-------------|
+| `clickmem_recall` | Search memories by semantic query |
+| `clickmem_remember` | Store a new memory |
+| `clickmem_extract` | Extract memories from conversation text |
+| `clickmem_forget` | Delete a memory |
+| `clickmem_status` | Show memory statistics |
+| `clickmem_working` | Get or set working memory (L0) |
+
+### LAN Discovery
+
+ClickMem servers advertise themselves via mDNS (`_clickmem._tcp`). Find servers on your network:
+
+```bash
+memory discover
+# → ✓ 192.168.1.100:9527  v0.1.0  (rest+mcp)
+# → To connect: memory recall 'query' --remote http://192.168.1.100:9527
+```
+
 ## Comparison
 
 | | MEMORY.md | Mem0 | Supermemory | **ClickMem** |
@@ -141,9 +309,10 @@ All commands support `--json` for machine-readable output.
 | Time decay | None | None | Smart forgetting | **Per-layer decay (exp + log)** |
 | Deduplication | Manual | LLM 4-op upsert | Relational versioning | **LLM 4-op upsert** |
 | Self-maintenance | Manual | ❌ | ❌ | **Auto (cleanup/compress/promote)** |
-| Graph memory | ❌ | ✅ Neo4j | ✅ Knowledge chains | ❌ (planned) |
+| Multi-tool sharing | ❌ | Cloud only | Cloud only | **✅ LAN server + MCP** |
 | Access tracking | ❌ | ❌ | ✅ | **✅ popularity-weighted recall** |
 | Result diversity | ❌ | ❌ | ❌ | **✅ MMR re-ranking** |
+| MCP support | ❌ | ❌ | ✅ (cloud) | **✅ stdio + SSE** |
 | Cost | Free | Pay per API call | Pay per API call | **Free** |
 
 ## Development
@@ -161,3 +330,4 @@ make deploy        # rsync to remote + full setup
 - [uv](https://docs.astral.sh/uv/) package manager
 - ~1 GB disk for model + data
 - macOS or Linux (chDB requirement)
+- Server extras: `pip install -e ".[server]"` for FastAPI, MCP, mDNS
