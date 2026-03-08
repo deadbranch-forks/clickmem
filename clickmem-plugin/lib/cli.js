@@ -187,7 +187,6 @@ let _queue = Promise.resolve();
 export function runAsync(args) {
   const wantsJson = hasFlag(args, "--json");
   const job = _queue.then(async () => {
-    // Try the HTTP server first (instant, no Python startup)
     if (wantsJson) {
       try {
         return await tryServerCall(args);

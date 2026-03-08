@@ -306,14 +306,19 @@ class RemoteTransport:
 
 
 _LOCALHOST_URL = "http://127.0.0.1:9527"
+_SERVER_PROBE_TIMEOUT = 2.0
 
 
 def get_transport(remote: str | None = None, api_key: str | None = None) -> LocalTransport | RemoteTransport:
     """Factory: return RemoteTransport if a remote URL is given, else LocalTransport.
 
-    When no remote is specified, tries LocalTransport first.  If chDB fails
-    to open (typically because ``memory serve`` already holds the lock),
-    falls back to the local server at 127.0.0.1:9527.
+    Priority order (server-first to avoid chDB file-lock contention):
+      1. Explicit ``remote`` / ``CLICKMEM_REMOTE`` env  → RemoteTransport
+      2. Local server at 127.0.0.1:9527 (quick probe)   → RemoteTransport
+      3. Direct chDB via LocalTransport                  → LocalTransport
+
+    On localhost the probe is nearly free: if nothing listens on 9527 the
+    kernel returns ECONNREFUSED immediately.
     """
     remote = remote or os.environ.get("CLICKMEM_REMOTE")
     api_key = api_key or os.environ.get("CLICKMEM_API_KEY", "")
@@ -327,23 +332,24 @@ def get_transport(remote: str | None = None, api_key: str | None = None) -> Loca
             remote = found
         return RemoteTransport(remote, api_key=api_key)
 
+    # 1) Probe local server first (avoids chDB lock contention)
+    try:
+        import httpx
+        with httpx.Client(base_url=_LOCALHOST_URL, timeout=_SERVER_PROBE_TIMEOUT) as probe:
+            resp = probe.get("/v1/health")
+            resp.raise_for_status()
+        return RemoteTransport(_LOCALHOST_URL, api_key=api_key)
+    except Exception:
+        pass
+
+    # 2) No server running — open chDB directly
     try:
         t = LocalTransport()
         t._get_db()
         return t
-    except RuntimeError:
-        import sys
-        try:
-            rt = RemoteTransport(_LOCALHOST_URL, api_key=api_key)
-            rt.health()
-            print(
-                f"chDB locked by server — using {_LOCALHOST_URL}",
-                file=sys.stderr,
-            )
-            return rt
-        except Exception:
-            raise RuntimeError(
-                "Cannot open chDB (locked by another process) and no local "
-                f"server found at {_LOCALHOST_URL}. Start the server with "
-                "'memory serve' or stop the other process."
-            )
+    except Exception:
+        raise RuntimeError(
+            "Cannot open chDB and no local server found at "
+            f"{_LOCALHOST_URL}. Start the server with 'memory serve' "
+            "or stop the other process holding the chDB lock."
+        )
