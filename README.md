@@ -178,7 +178,7 @@ All commands support `--json` for machine-readable output.
 
 ### Service — Background Server
 
-ClickMem runs as a background service so the API server (port 9527) is always available. The MCP stdio transport also co-hosts the HTTP API, so CLI commands and plugins can share the same database without chDB lock contention.
+ClickMem runs as a background service so the API server (port 9527) is always available.
 
 ```bash
 # Install and start the service (done automatically by setup.sh)
@@ -256,8 +256,6 @@ ClickMem speaks [MCP (Model Context Protocol)](https://modelcontextprotocol.io/)
 ```bash
 memory mcp
 ```
-
-In stdio mode, `memory mcp` also starts an HTTP API on port 9527 as a background task, so CLI commands and OpenClaw plugins can reach the same chDB database without lock contention. If the port is already in use (e.g. by `memory serve`), it connects to the existing server instead.
 
 **Remote (SSE) — built into `memory serve`:** No separate command needed. `memory serve` exposes MCP SSE at `/sse` on the same port as the REST API.
 
