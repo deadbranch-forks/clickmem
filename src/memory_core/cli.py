@@ -357,6 +357,109 @@ def maintain(
 
 
 # ---------------------------------------------------------------------------
+# Service management
+# ---------------------------------------------------------------------------
+
+service_app = typer.Typer(name="service", help="Manage the ClickMem background service (launchd / systemd)")
+app.add_typer(service_app)
+
+
+@service_app.command(name="install")
+def service_install(
+    host: str = typer.Option("0.0.0.0", "--host", "-H", help="Bind address (0.0.0.0 for LAN)"),
+    port: int = typer.Option(9527, "--port", "-p", help="HTTP port for the server"),
+):
+    """Install and start ClickMem as a background service."""
+    from memory_core.service import install
+    try:
+        path = install(host=host, port=port)
+        console.print(f"[green]✓[/green] Service installed and started")
+        console.print(f"  Config: {path}")
+        console.print(f"  Listen: {host}:{port}")
+        console.print(f"\n  Check status:  memory service status")
+        console.print(f"  View logs:     memory service logs")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+
+@service_app.command(name="uninstall")
+def service_uninstall():
+    """Stop and remove the ClickMem background service."""
+    from memory_core.service import uninstall
+    removed = uninstall()
+    if removed:
+        console.print("[green]✓[/green] Service stopped and removed")
+    else:
+        console.print("Service was not installed.")
+
+
+@service_app.command(name="start")
+def service_start():
+    """Start the ClickMem background service."""
+    from memory_core.service import start
+    try:
+        start()
+        console.print("[green]✓[/green] Service started")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+
+@service_app.command(name="stop")
+def service_stop():
+    """Stop the ClickMem background service."""
+    from memory_core.service import stop
+    stop()
+    console.print("[green]✓[/green] Service stopped")
+
+
+@service_app.command(name="status")
+def service_status(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Show the ClickMem service status."""
+    from memory_core.service import status
+    info = status()
+
+    if json_output:
+        typer.echo(json.dumps(info, default=str))
+        return
+
+    state = "[green]running[/green]" if info["running"] else "[red]stopped[/red]"
+    console.print(f"  Status:    {state}")
+    console.print(f"  Installed: {'yes' if info['installed'] else 'no'}")
+    if info.get("pid"):
+        console.print(f"  PID:       {info['pid']}")
+    if info.get("config"):
+        console.print(f"  Config:    {info['config']}")
+
+
+@service_app.command(name="logs")
+def service_logs(
+    follow: bool = typer.Option(False, "-f", "--follow", help="Follow log output"),
+    lines: int = typer.Option(50, "-n", "--lines", help="Number of lines to show"),
+):
+    """Show ClickMem service logs."""
+    from memory_core.service import log_path
+    lp = log_path()
+    if not lp.exists():
+        console.print("No log file found yet.")
+        return
+
+    if follow:
+        os.execvp("tail", ["tail", "-f", "-n", str(lines), str(lp)])
+    else:
+        import subprocess
+        result = subprocess.run(
+            ["tail", "-n", str(lines), str(lp)],
+            capture_output=True, text=True,
+        )
+        if result.stdout:
+            console.print(result.stdout, end="")
+
+
+# ---------------------------------------------------------------------------
 # Server commands
 # ---------------------------------------------------------------------------
 
