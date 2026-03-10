@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS memories (
     embedding Array(Float32),
     session_id String DEFAULT '',
     source String DEFAULT 'agent',
+    raw_id String DEFAULT '',
     is_active UInt8 DEFAULT 1,
     access_count UInt32 DEFAULT 0,
     created_at DateTime64(3, 'UTC'),
@@ -30,6 +31,20 @@ CREATE TABLE IF NOT EXISTS memories (
     accessed_at DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (id)
+"""
+
+_CREATE_RAW_TABLE = """
+CREATE TABLE IF NOT EXISTS raw_transcripts (
+    id          String,
+    session_id  String DEFAULT '',
+    source      String DEFAULT 'cursor',
+    content     String,
+    char_count  UInt32,
+    is_processed UInt8 DEFAULT 0,
+    processed_at DateTime64(3, 'UTC') DEFAULT '1970-01-01',
+    created_at  DateTime64(3, 'UTC')
+) ENGINE = MergeTree()
+ORDER BY (created_at, id)
 """
 
 _session_lock = threading.Lock()
@@ -72,6 +87,7 @@ class MemoryDB:
     def __init__(self, db_path: str = ":memory:"):
         self._session = _get_session(db_path)
         self._session.query(_CREATE_TABLE)
+        self._session.query(_CREATE_RAW_TABLE)
 
     # -- internal helpers --------------------------------------------------
 
@@ -105,6 +121,7 @@ class MemoryDB:
             embedding=row.get("embedding"),
             session_id=row.get("session_id") or None,
             source=row.get("source", "agent"),
+            raw_id=row.get("raw_id") or None,
             is_active=bool(row.get("is_active", 1)),
             access_count=int(row.get("access_count", 0)),
             created_at=created_at,
@@ -124,10 +141,11 @@ class MemoryDB:
         return parsed.get("data", [])
 
     def _truncate(self) -> None:
-        """Drop all data from the memories table (for test isolation)."""
+        """Drop all data from memories and raw_transcripts tables (for test isolation)."""
         self._session.query("TRUNCATE TABLE IF EXISTS memories")
+        self._session.query("TRUNCATE TABLE IF EXISTS raw_transcripts")
 
-    # -- L0 Working --------------------------------------------------------
+    # -- L0 Working (deprecated — agents manage their own session context) --
 
     def set_working(self, content: str, **kwargs) -> str:
         now_dt = datetime.now(timezone.utc)
@@ -177,16 +195,17 @@ class MemoryDB:
         entities_literal = self._array_literal(memory.entities)
         session_id = self._escape(memory.session_id or "")
         source = self._escape(memory.source)
+        raw_id = self._escape(memory.raw_id or "")
         is_active = 1 if memory.is_active else 0
 
         sql = (
             f"INSERT INTO memories (id, layer, category, content, tags, entities, "
-            f"embedding, session_id, source, is_active, access_count, "
+            f"embedding, session_id, source, raw_id, is_active, access_count, "
             f"created_at, updated_at, accessed_at) VALUES "
             f"('{self._escape(memory.id)}', '{self._escape(memory.layer)}', "
             f"'{self._escape(memory.category)}', '{self._escape(memory.content)}', "
             f"{tags_literal}, {entities_literal}, {emb_literal}, "
-            f"'{session_id}', '{source}', {is_active}, {memory.access_count}, "
+            f"'{session_id}', '{source}', '{raw_id}', {is_active}, {memory.access_count}, "
             f"'{created}', '{updated}', '{accessed}')"
         )
         self._session.query(sql)
@@ -380,6 +399,62 @@ class MemoryDB:
             f") GROUP BY tag HAVING cnt >= {min_count} ORDER BY cnt DESC"
         )
         return {r["tag"]: int(r["cnt"]) for r in rows}
+
+    # -- Raw Transcripts ---------------------------------------------------
+
+    def insert_raw(self, session_id: str, source: str, content: str) -> str:
+        """Insert a raw transcript. Returns the generated id."""
+        raw_id = str(uuid.uuid4())
+        now = self._now_str()
+        char_count = len(content)
+        sql = (
+            f"INSERT INTO raw_transcripts (id, session_id, source, content, "
+            f"char_count, is_processed, created_at) VALUES "
+            f"('{self._escape(raw_id)}', '{self._escape(session_id)}', "
+            f"'{self._escape(source)}', '{self._escape(content)}', "
+            f"{char_count}, 0, '{now}')"
+        )
+        self._session.query(sql)
+        return raw_id
+
+    def get_raw(self, raw_id: str) -> dict | None:
+        rows = self._query_json(
+            f"SELECT * FROM raw_transcripts "
+            f"WHERE id = '{self._escape(raw_id)}' LIMIT 1"
+        )
+        return rows[0] if rows else None
+
+    def list_unprocessed_raw(self, limit: int = 100) -> list[dict]:
+        return self._query_json(
+            f"SELECT * FROM raw_transcripts "
+            f"WHERE is_processed = 0 "
+            f"ORDER BY created_at ASC LIMIT {limit}"
+        )
+
+    def mark_raw_processed(self, raw_id: str) -> None:
+        now = self._now_str()
+        self._session.query(
+            f"ALTER TABLE raw_transcripts UPDATE "
+            f"is_processed = 1, processed_at = '{now}' "
+            f"WHERE id = '{self._escape(raw_id)}'"
+        )
+
+    def count_raw(self) -> dict:
+        rows = self._query_json(
+            "SELECT "
+            "count() as total, "
+            "countIf(is_processed = 1) as processed, "
+            "countIf(is_processed = 0) as unprocessed "
+            "FROM raw_transcripts"
+        )
+        if not rows:
+            return {"total": 0, "processed": 0, "unprocessed": 0}
+        r = rows[0]
+        return {
+            "total": int(r["total"]),
+            "processed": int(r["processed"]),
+            "unprocessed": int(r["unprocessed"]),
+        }
 
     # -- Raw SQL -----------------------------------------------------------
 

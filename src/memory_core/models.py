@@ -23,7 +23,8 @@ class Memory:
     entities: list[str] = field(default_factory=list)
     embedding: Optional[list[float]] = None
     session_id: Optional[str] = None
-    source: str = "agent"  # agent | cli | user_edit | compaction_flush | maintenance
+    source: str = "agent"  # agent | cli | user_edit | compaction_flush | maintenance | refinement
+    raw_id: Optional[str] = None  # pointer to raw_transcripts.id (lineage)
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     is_active: bool = True
     access_count: int = 0
@@ -42,5 +43,6 @@ class RetrievalConfig:
     decay_days: float = 60.0
     mmr_lambda: float = 0.7
     semantic_boost: float = 1.3
+    refinement_boost: float = 1.15
     layer: Optional[str] = None  # filter by layer; None = all applicable
     category: Optional[str] = None  # filter by category; None = all
