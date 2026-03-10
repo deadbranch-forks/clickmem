@@ -80,6 +80,21 @@ export async function extract(text, sessionId = "") {
 }
 
 /**
+ * Ingest raw conversation text: stores in raw_transcripts + extracts memories.
+ * Returns { raw_id, extracted_ids } or null on failure.
+ */
+export async function ingest(text, sessionId = "", source = "cursor") {
+  try {
+    const resp = JSON.parse(
+      await httpPost("/v1/ingest", { text, session_id: sessionId, source })
+    );
+    return resp;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Store a raw memory as fallback when extract fails.
  */
 export async function remember(content, { layer = "episodic", category = "event" } = {}) {

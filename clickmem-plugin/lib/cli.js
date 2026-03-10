@@ -32,7 +32,7 @@ function execEnv() {
 // ---------------------------------------------------------------------------
 
 const SERVER_PORT = parseInt(process.env.CLICKMEM_SERVER_PORT || _llmEnv.CLICKMEM_SERVER_PORT || "9527", 10);
-const SERVER_HOST = "127.0.0.1";
+const SERVER_HOST = process.env.CLICKMEM_SERVER_HOST || _llmEnv.CLICKMEM_SERVER_HOST || "127.0.0.1";
 
 // ---------------------------------------------------------------------------
 // HTTP client — talk to `memory serve` directly (no Python startup)
@@ -116,6 +116,16 @@ async function tryServerCall(args) {
     const body = { text, session_id: parseFlag(args, "--session-id", "") };
     const resp = JSON.parse(await httpPost("/v1/extract", body));
     return JSON.stringify(resp.ids || []);
+  }
+
+  if (cmd === "ingest") {
+    const text = args[1] || "";
+    const body = {
+      text,
+      session_id: parseFlag(args, "--session-id", ""),
+      source: parseFlag(args, "--source", "openclaw"),
+    };
+    return await httpPost("/v1/ingest", body);
   }
 
   if (cmd === "remember") {

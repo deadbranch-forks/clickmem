@@ -80,15 +80,16 @@ export async function handleAfterAgentResponse(input) {
 
   const sessionId = getSessionId(input.workspace_roots);
 
-  const ids = await client.extract(truncated, sessionId);
-  if (ids.length > 0) {
-    _log(`extracted ${ids.length} memories from ${truncated.length} chars`);
-  } else if (turnText.length > 200) {
+  const result = await client.ingest(truncated, sessionId, "cursor");
+  if (result) {
+    const n = result.extracted_ids?.length || 0;
+    _log(`ingested raw_id=${result.raw_id?.slice(0, 8)}, extracted ${n} memories`);
+  } else {
     const stored = await client.remember(truncate(turnText, 2000), {
       layer: "episodic",
       category: "event",
     });
-    if (stored) _log("stored raw memory (extract returned 0)");
+    if (stored) _log("stored raw memory (ingest unavailable)");
   }
 
   _conversationBuffers.delete(key);

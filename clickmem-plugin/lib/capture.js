@@ -26,16 +26,18 @@ export function buildCaptureHandler(cfg, run) {
       return;
     }
 
-    const truncated = text.length > 2000 ? text.slice(0, 2000) + "..." : text;
+    const truncated = text.length > 4000 ? text.slice(0, 4000) + "..." : text;
 
-    console.log("[clickmem] capture: extracting from %d chars", truncated.length);
+    console.log("[clickmem] capture: ingesting %d chars", truncated.length);
 
     try {
-      const result = await run(["extract", truncated, "--json"]);
-      const ids = JSON.parse(result);
-      console.log("[clickmem] capture: extracted %d memories", ids.length);
-    } catch (extractErr) {
-      console.error("[clickmem] capture: extract failed:", extractErr.message);
+      const result = await run(["ingest", truncated, "--source", "openclaw", "--json"]);
+      const parsed = JSON.parse(result);
+      const n = parsed.extracted_ids?.length || 0;
+      console.log("[clickmem] capture: ingested raw_id=%s, extracted %d memories",
+        (parsed.raw_id || "").slice(0, 8), n);
+    } catch (ingestErr) {
+      console.error("[clickmem] capture: ingest failed:", ingestErr.message);
       try {
         await run([
           "remember", truncated,
@@ -43,10 +45,11 @@ export function buildCaptureHandler(cfg, run) {
           "--category", "event",
           "--json"
         ]);
-        console.log("[clickmem] capture: stored raw (extract unavailable)");
+        console.log("[clickmem] capture: stored raw (ingest unavailable)");
       } catch (storeErr) {
         console.error("[clickmem] capture FAILED: could not store memory:", storeErr.message);
-        console.error("[clickmem] Is the ClickMem API server running? (port 9527)");
+        const port = process.env.CLICKMEM_SERVER_PORT || "9527";
+        console.error(`[clickmem] Is the ClickMem API server running? (port ${port})`);
       }
     }
   };
