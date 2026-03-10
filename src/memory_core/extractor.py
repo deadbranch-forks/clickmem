@@ -49,6 +49,7 @@ class MemoryExtractor:
         messages: list[dict],
         llm_complete,
         session_id: str = "",
+        raw_id: str = "",
     ) -> list[str]:
         if not messages:
             return []
@@ -79,6 +80,7 @@ class MemoryExtractor:
                 embedding=self._emb.encode_document(mem_data.get("content", "")),
                 session_id=session_id,
                 source="agent",
+                raw_id=raw_id or None,
             )
             self._db.insert(m)
             ids.append(m.id)
