@@ -275,8 +275,12 @@ def _linux_status() -> dict:
 # Public API — platform-dispatching
 # ---------------------------------------------------------------------------
 
-def install(host: str = "0.0.0.0", port: int = 9527) -> str:
+def install(host: str | None = None, port: int | None = None) -> str:
     """Install and start the service. Returns the config file path."""
+    if host is None:
+        host = os.environ.get("CLICKMEM_SERVER_HOST", "0.0.0.0")
+    if port is None:
+        port = int(os.environ.get("CLICKMEM_SERVER_PORT", "9527"))
     plat = _detect_platform()
     if plat == "macos":
         return _macos_install(host, port)

@@ -6,10 +6,14 @@ RemoteTransport: HTTP calls to a ClickMem REST API server (for LAN/remote access
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from typing import Optional, Protocol
 
 from memory_core.models import Memory, RetrievalConfig
+
+_log = logging.getLogger("clickmem.transport")
 
 
 class Transport(Protocol):
@@ -23,6 +27,9 @@ class Transport(Protocol):
                  no_upsert: bool = False) -> dict: ...
 
     def extract(self, text: str, session_id: str = "") -> list[str]: ...
+
+    def ingest(self, text: str, session_id: str = "",
+               source: str = "cursor") -> dict: ...
 
     def forget(self, memory_id: str) -> dict: ...
 
@@ -40,6 +47,8 @@ class Transport(Protocol):
 class LocalTransport:
     """Direct in-process access — current behavior, no network overhead."""
 
+    _REFINE_THRESHOLD = int(os.environ.get("CLICKMEM_REFINE_THRESHOLD", "1"))
+
     def __init__(self, db_path: str | None = None):
         self._db_path = db_path or os.environ.get(
             "CLICKMEM_DB_PATH",
@@ -47,6 +56,7 @@ class LocalTransport:
         )
         self._db = None
         self._emb = None
+        self._refinement_lock = threading.Lock()
 
     def _get_db(self):
         if self._db is None:
@@ -149,6 +159,62 @@ class LocalTransport:
             llm_complete, session_id=session_id,
         )
 
+    def ingest(self, text: str, session_id: str = "",
+               source: str = "cursor") -> dict:
+        """Raw-first ingestion: store raw transcript, then extract memories."""
+        db = self._get_db()
+        emb = self._get_emb()
+
+        raw_id = db.insert_raw(session_id, source, text)
+
+        from memory_core.llm import get_llm_complete
+        llm_complete = get_llm_complete()
+
+        if llm_complete is None:
+            m = Memory(
+                content=text, layer="episodic", category="event",
+                embedding=emb.encode_document(text),
+                session_id=session_id, source="agent", raw_id=raw_id,
+            )
+            db.insert(m)
+            ids = [m.id]
+        else:
+            from memory_core.extractor import MemoryExtractor
+            extractor = MemoryExtractor(db, emb)
+            ids = extractor.extract(
+                [{"role": "user", "content": text}],
+                llm_complete, session_id=session_id, raw_id=raw_id,
+            )
+
+        db.mark_raw_processed(raw_id)
+
+        raw_counts = db.count_raw()
+        if raw_counts["unprocessed"] >= self._REFINE_THRESHOLD:
+            self._trigger_refinement()
+
+        return {"raw_id": raw_id, "extracted_ids": ids}
+
+    def _trigger_refinement(self) -> None:
+        """Start refinement in a background thread if not already running."""
+        if not self._refinement_lock.acquire(blocking=False):
+            return
+        t = threading.Thread(target=self._run_refinement, daemon=True)
+        t.start()
+
+    def _run_refinement(self) -> None:
+        try:
+            from memory_core.refinement import ContinualRefinement
+            from memory_core.llm import get_llm_complete
+            db = self._get_db()
+            emb = self._get_emb()
+            llm = get_llm_complete()
+            if llm is not None:
+                ContinualRefinement.run(db, emb, llm)
+        except Exception as exc:
+            _log.warning("Background refinement failed: %s", exc)
+        finally:
+            self._refinement_lock.release()
+
     def forget(self, memory_id: str) -> dict:
         import re
         db = self._get_db()
@@ -195,7 +261,11 @@ class LocalTransport:
         counts = db.count_by_layer()
         total = db.count()
         breakdown = db.stats()
-        return {"counts": counts, "total": total, "breakdown": breakdown}
+        raw_counts = db.count_raw()
+        return {
+            "counts": counts, "total": total,
+            "breakdown": breakdown, "raw": raw_counts,
+        }
 
     def maintain(self, dry_run: bool = False) -> dict:
         db = self._get_db()
@@ -282,6 +352,12 @@ class RemoteTransport:
         data = self._post("/v1/extract", json={"text": text, "session_id": session_id})
         return data.get("ids", [])
 
+    def ingest(self, text: str, session_id: str = "",
+               source: str = "cursor") -> dict:
+        return self._post("/v1/ingest", json={
+            "text": text, "session_id": session_id, "source": source,
+        })
+
     def forget(self, memory_id: str) -> dict:
         return self._delete(f"/v1/forget/{memory_id}")
 
@@ -305,8 +381,13 @@ class RemoteTransport:
         return self._get("/v1/health")
 
 
-_LOCALHOST_URL = "http://127.0.0.1:9527"
 _SERVER_PROBE_TIMEOUT = 2.0
+
+
+def _localhost_url() -> str:
+    host = os.environ.get("CLICKMEM_SERVER_HOST", "127.0.0.1")
+    port = os.environ.get("CLICKMEM_SERVER_PORT", "9527")
+    return f"http://{host}:{port}"
 
 
 def get_transport(remote: str | None = None, api_key: str | None = None) -> LocalTransport | RemoteTransport:
@@ -318,7 +399,7 @@ def get_transport(remote: str | None = None, api_key: str | None = None) -> Loca
 
     Priority:
       1. Explicit ``remote`` / ``CLICKMEM_REMOTE`` env → RemoteTransport
-      2. Local server at 127.0.0.1:9527 (quick probe)  → RemoteTransport
+      2. Local server (CLICKMEM_SERVER_HOST:CLICKMEM_SERVER_PORT, quick probe) → RemoteTransport
       3. Error — no server available
     """
     remote = remote or os.environ.get("CLICKMEM_REMOTE")
@@ -334,15 +415,16 @@ def get_transport(remote: str | None = None, api_key: str | None = None) -> Loca
         return RemoteTransport(remote, api_key=api_key)
 
     # Probe local server
+    local_url = _localhost_url()
     try:
         import httpx
-        with httpx.Client(base_url=_LOCALHOST_URL, timeout=_SERVER_PROBE_TIMEOUT) as probe:
+        with httpx.Client(base_url=local_url, timeout=_SERVER_PROBE_TIMEOUT) as probe:
             resp = probe.get("/v1/health")
             resp.raise_for_status()
-        return RemoteTransport(_LOCALHOST_URL, api_key=api_key)
+        return RemoteTransport(local_url, api_key=api_key)
     except Exception:
         raise RuntimeError(
-            f"No ClickMem API server at {_LOCALHOST_URL}. "
+            f"No ClickMem API server at {local_url}. "
             "The server starts automatically with Cursor/Claude Code (clickmem-mcp) "
             "or manually via 'memory serve'."
         )

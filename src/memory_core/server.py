@@ -6,14 +6,18 @@ Start with: memory serve --host 0.0.0.0 --port 9527
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Header, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from memory_core.auth import verify_api_key
+
+_log = logging.getLogger("clickmem.server")
 
 # ---------------------------------------------------------------------------
 # Request / Response models
@@ -39,6 +43,12 @@ class RememberRequest(BaseModel):
 class ExtractRequest(BaseModel):
     text: str
     session_id: str = ""
+
+
+class IngestRequest(BaseModel):
+    text: str
+    session_id: str = ""
+    source: str = "cursor"
 
 
 class MaintainRequest(BaseModel):
@@ -156,6 +166,14 @@ async def extract(req: ExtractRequest):
     return {"ids": ids}
 
 
+@app.post("/v1/ingest", dependencies=[Depends(auth_dep)])
+async def ingest(req: IngestRequest):
+    t = _get_transport()
+    return await asyncio.to_thread(
+        t.ingest, text=req.text, session_id=req.session_id, source=req.source,
+    )
+
+
 @app.delete("/v1/forget/{memory_id}", dependencies=[Depends(auth_dep)])
 async def forget(memory_id: str):
     t = _get_transport()
@@ -209,6 +227,169 @@ async def sql(req: SqlRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Claude Code Hooks — HTTP hook endpoint for automatic recall & capture.
+#
+# Claude Code fires hooks at lifecycle points (SessionStart, Stop, etc.) and
+# can POST the event payload directly to an HTTP endpoint.  This eliminates
+# the need for an external script — the ClickMem server handles everything.
+#
+# Hook registration (in ~/.claude/settings.json):
+#   { "hooks": { "SessionStart": [{ "hooks": [{
+#       "type": "http", "url": "http://127.0.0.1:9527/hooks/claude-code" }] }], ... }}
+# ---------------------------------------------------------------------------
+
+_cc_prompt_buffers: dict[str, str] = {}
+
+_CC_MAX_TURN_CHARS = 4000
+_CC_RECALL_TOP_K = 5
+_CC_RECALL_MIN_SCORE = 0.25
+
+
+@app.post("/hooks/claude-code")
+async def claude_code_hook(request: Request):
+    """Route Claude Code hook events to the appropriate handler.
+
+    Handles SessionStart (recall), UserPromptSubmit (buffer prompt),
+    Stop (extract memories), and SessionEnd (maintenance).
+    All errors are swallowed — hooks must never block Claude Code.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({})
+
+    event = payload.get("hook_event_name", "")
+    try:
+        if event == "SessionStart":
+            return JSONResponse(await _cc_session_start(payload))
+        elif event == "UserPromptSubmit":
+            return JSONResponse(await _cc_user_prompt_submit(payload))
+        elif event == "Stop":
+            return JSONResponse(await _cc_stop(payload))
+        elif event == "SessionEnd":
+            return JSONResponse(await _cc_session_end(payload))
+        else:
+            return JSONResponse({})
+    except Exception as exc:
+        _log.debug("claude-code hook %s failed: %s", event, exc)
+        return JSONResponse({})
+
+
+async def _cc_session_start(payload: dict) -> dict:
+    """Recall relevant memories and inject them as additionalContext."""
+    from memory_core.models import RetrievalConfig
+
+    cwd = payload.get("cwd", "")
+    workspace_name = os.path.basename(cwd) if cwd else ""
+    query = f"{workspace_name} recent work context" if workspace_name else "recent work context"
+
+    t = _get_transport()
+    results = await asyncio.to_thread(
+        t.recall, query,
+        cfg=RetrievalConfig(top_k=_CC_RECALL_TOP_K),
+        min_score=_CC_RECALL_MIN_SCORE,
+    )
+
+    if not results:
+        return {}
+
+    lines = []
+    for r in results:
+        score = round(r.get("final_score", 0) * 100)
+        short_id = r.get("id", "")[:8]
+        layer = r.get("layer", "")
+        category = r.get("category", "")
+        content = r["content"]
+        lines.append(f"- [id:{short_id}] [{layer}/{category}] {content} ({score}%)")
+
+    context = "\n".join([
+        "<clickmem-context>",
+        "Background from long-term memory. Use silently unless directly relevant.",
+        "",
+        *lines,
+        "</clickmem-context>",
+    ])
+
+    _log.info("claude-code SessionStart: injected %d memories for %s", len(results), workspace_name)
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": context,
+        }
+    }
+
+
+async def _cc_user_prompt_submit(payload: dict) -> dict:
+    """Buffer the user prompt so the Stop handler can build the full turn."""
+    session_id = payload.get("session_id", "")
+    prompt = payload.get("prompt", "")
+    if session_id and prompt:
+        _cc_prompt_buffers[session_id] = prompt
+    return {}
+
+
+async def _cc_stop(payload: dict) -> dict:
+    """Extract memories from the completed turn (buffered prompt + assistant response)."""
+    session_id = payload.get("session_id", "")
+    assistant_msg = payload.get("last_assistant_message", "")
+
+    if not assistant_msg or len(assistant_msg) < 20:
+        return {}
+
+    user_prompt = _cc_prompt_buffers.pop(session_id, "")
+    if user_prompt:
+        turn_text = f"user: {user_prompt}\nassistant: {assistant_msg}"
+    else:
+        turn_text = f"assistant: {assistant_msg}"
+
+    if len(turn_text) > _CC_MAX_TURN_CHARS:
+        turn_text = turn_text[:_CC_MAX_TURN_CHARS]
+
+    if len(turn_text) < 40:
+        return {}
+
+    t = _get_transport()
+    try:
+        result = await asyncio.to_thread(
+            t.ingest, text=turn_text, session_id=session_id, source="claude",
+        )
+        ids = result.get("extracted_ids", [])
+        raw_id = result.get("raw_id", "")
+        _log.info(
+            "claude-code Stop: ingested raw_id=%s, extracted %d memories from %d chars",
+            raw_id[:8] if raw_id else "?", len(ids), len(turn_text),
+        )
+    except Exception as exc:
+        _log.debug("claude-code Stop ingest failed: %s", exc)
+
+    return {}
+
+
+async def _cc_session_end(payload: dict) -> dict:
+    """Clean up prompt buffer and run lightweight maintenance."""
+    session_id = payload.get("session_id", "")
+    _cc_prompt_buffers.pop(session_id, None)
+
+    t = _get_transport()
+    try:
+        result = await asyncio.to_thread(t.maintain)
+        if result:
+            parts = []
+            if result.get("stale_cleaned"):
+                parts.append(f"stale={result['stale_cleaned']}")
+            if result.get("deleted_purged"):
+                parts.append(f"purged={result['deleted_purged']}")
+            if result.get("promoted"):
+                parts.append(f"promoted={result['promoted']}")
+            if parts:
+                _log.info("claude-code SessionEnd maintenance: %s", ", ".join(parts))
+    except Exception as exc:
+        _log.debug("claude-code SessionEnd maintenance failed: %s", exc)
+
+    return {}
+
+
 def _build_combined_app():
     """Build a combined ASGI app: FastAPI REST + MCP SSE on the same port.
 
@@ -243,8 +424,12 @@ def _build_combined_app():
     return combined
 
 
-def run_server(host: str = "127.0.0.1", port: int = 9527, debug: bool = False,
+def run_server(host: str | None = None, port: int | None = None, debug: bool = False,
                register_mdns: bool = True, mcp: bool = True):
+    if host is None:
+        host = os.environ.get("CLICKMEM_SERVER_HOST", "127.0.0.1")
+    if port is None:
+        port = int(os.environ.get("CLICKMEM_SERVER_PORT", "9527"))
     """Start the ClickMem server (blocking).
 
     When *mcp* is True (default), MCP SSE is served on the same port at

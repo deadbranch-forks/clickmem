@@ -31,7 +31,7 @@ server = Server("clickmem")
 _transport = None
 
 _HTTP_PORT = int(os.environ.get("CLICKMEM_SERVER_PORT", "9527"))
-_HTTP_HOST = "127.0.0.1"
+_HTTP_HOST = os.environ.get("CLICKMEM_SERVER_HOST", "127.0.0.1")
 
 
 def set_transport(t):
@@ -123,8 +123,22 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="clickmem_ingest",
+            description="Ingest raw conversation text: stores full text in raw_transcripts, then extracts structured memories to L1/L2. Preferred over extract for new data.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Full conversation text to ingest"},
+                    "session_id": {"type": "string", "description": "Session ID", "default": ""},
+                    "source": {"type": "string", "description": "Source identifier", "default": "mcp",
+                               "enum": ["cursor", "claude", "openclaw", "mcp", "import"]},
+                },
+                "required": ["text"],
+            },
+        ),
+        Tool(
             name="clickmem_working",
-            description="Get or set working memory (L0). Omit 'content' to read current value.",
+            description="[Deprecated] Get or set working memory (L0). Agents typically manage their own session context. Omit 'content' to read current value.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -179,6 +193,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             session_id=arguments.get("session_id", ""),
         )
         return _json_text({"extracted": len(ids), "ids": ids})
+
+    if name == "clickmem_ingest":
+        result = await asyncio.to_thread(
+            t.ingest,
+            text=arguments["text"],
+            session_id=arguments.get("session_id", ""),
+            source=arguments.get("source", "mcp"),
+        )
+        return _json_text(result)
 
     if name == "clickmem_forget":
         result = await asyncio.to_thread(t.forget, arguments["id_or_content"])
