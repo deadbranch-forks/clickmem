@@ -66,14 +66,9 @@ class LocalTransport:
 
     def _get_emb(self):
         if self._emb is None:
-            try:
-                from memory_core.embedding import EmbeddingEngine
-                self._emb = EmbeddingEngine()
-                self._emb.load()
-            except Exception:
-                from tests.helpers.mock_embedding import MockEmbeddingEngine
-                self._emb = MockEmbeddingEngine(dimension=256)
-                self._emb.load()
+            from memory_core.embedding import EmbeddingEngine
+            self._emb = EmbeddingEngine()
+            self._emb.load()
         return self._emb
 
     def recall(self, query: str, cfg: RetrievalConfig | None = None,

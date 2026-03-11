@@ -81,16 +81,10 @@ def _get_db():
 
 
 def _get_emb():
-    try:
-        from memory_core.embedding import EmbeddingEngine
-        emb = EmbeddingEngine()
-        emb.load()
-        return emb
-    except Exception:
-        from tests.helpers.mock_embedding import MockEmbeddingEngine
-        emb = MockEmbeddingEngine(dimension=256)
-        emb.load()
-        return emb
+    from memory_core.embedding import EmbeddingEngine
+    emb = EmbeddingEngine()
+    emb.load()
+    return emb
 
 
 # ---------------------------------------------------------------------------

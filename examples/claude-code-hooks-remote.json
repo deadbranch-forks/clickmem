@@ -34,13 +34,10 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://192.168.1.100:9527/hooks/claude-code",
-            "timeout": 30,
-            "headers": {
-              "Authorization": "Bearer $CLICKMEM_API_KEY"
-            },
-            "allowedEnvVars": ["CLICKMEM_API_KEY"]
+            "type": "command",
+            "command": "curl -s -X POST -H 'Content-Type: application/json' -H \"Authorization: Bearer $CLICKMEM_API_KEY\" -d @- http://192.168.1.100:9527/hooks/claude-code",
+            "async": true,
+            "timeout": 60
           }
         ]
       }
@@ -49,13 +46,10 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://192.168.1.100:9527/hooks/claude-code",
-            "timeout": 30,
-            "headers": {
-              "Authorization": "Bearer $CLICKMEM_API_KEY"
-            },
-            "allowedEnvVars": ["CLICKMEM_API_KEY"]
+            "type": "command",
+            "command": "curl -s -X POST -H 'Content-Type: application/json' -H \"Authorization: Bearer $CLICKMEM_API_KEY\" -d @- http://192.168.1.100:9527/hooks/claude-code",
+            "async": true,
+            "timeout": 60
           }
         ]
       }

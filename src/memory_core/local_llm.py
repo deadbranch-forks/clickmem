@@ -1,24 +1,42 @@
-"""LocalLLMEngine — local text generation using MLX or transformers.
+"""LocalLLMEngine — GPU-accelerated local text generation.
 
 Backend priority:
-1. MLX (macOS Apple Silicon — fastest, lowest memory)
-2. transformers (cross-platform, installed via sentence-transformers)
+1. MLX (macOS Apple Silicon — fastest, Metal GPU via Apple framework)
+2. transformers + CUDA (Linux/Windows with NVIDIA GPU)
+3. No GPU → refuse to load (fall back to remote LLM via llm.py)
 
-Supported models (set via CLICKMEM_LOCAL_MODEL):
-  Qwen/Qwen3.5-2B  — 2B params, ~1.5 GB RAM, fastest (default)
-  Qwen/Qwen3.5-4B  — 4B params, ~3 GB RAM, better extraction quality
-  Qwen/Qwen3.5-9B  — 9B params, ~6 GB RAM, best quality for refinement
+Model auto-selection based on available memory:
+  Apple Silicon unified memory:
+    >=32 GB → Qwen/Qwen3.5-9B
+    >=16 GB → Qwen/Qwen3.5-4B
+    >= 8 GB → Qwen/Qwen3.5-2B
+  CUDA VRAM:
+    >=16 GB → Qwen/Qwen3.5-9B
+    >= 8 GB → Qwen/Qwen3.5-4B
+    >= 4 GB → Qwen/Qwen3.5-2B
+
+Override with CLICKMEM_LOCAL_MODEL env var.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import platform
 import re
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "Qwen/Qwen3.5-2B"
+_MLX_THRESHOLDS = [
+    (32, "Qwen/Qwen3.5-9B"),
+    (16, "Qwen/Qwen3.5-4B"),
+    (8, "Qwen/Qwen3.5-2B"),
+]
+_CUDA_THRESHOLDS = [
+    (16, "Qwen/Qwen3.5-9B"),
+    (8, "Qwen/Qwen3.5-4B"),
+    (4, "Qwen/Qwen3.5-2B"),
+]
 
 
 def _strip_think_tags(text: str) -> str:
@@ -26,11 +44,73 @@ def _strip_think_tags(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
-class LocalLLMEngine:
-    """Local LLM inference engine with automatic backend selection.
+def _get_system_memory_gb() -> float:
+    """Total physical memory in GB."""
+    try:
+        return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / (1024**3)
+    except (ValueError, OSError):
+        return 0
 
-    Tries MLX first (fast on Apple Silicon), then falls back to
-    HuggingFace transformers (cross-platform).
+
+def _get_cuda_vram_gb() -> float:
+    """CUDA GPU VRAM in GB, or 0 if unavailable."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    except (ImportError, RuntimeError):
+        pass
+    return 0
+
+
+def _auto_select_model() -> str | None:
+    """Pick the best model for current hardware, or None if no GPU."""
+    is_apple_silicon = (
+        platform.system() == "Darwin" and platform.machine() == "arm64"
+    )
+
+    if is_apple_silicon:
+        try:
+            import mlx_lm  # noqa: F401
+            mem_gb = _get_system_memory_gb()
+            for threshold, model in _MLX_THRESHOLDS:
+                if mem_gb >= threshold:
+                    logger.info(
+                        "Auto-selected %s for %.0f GB Apple Silicon (MLX)",
+                        model, mem_gb,
+                    )
+                    return model
+            logger.warning(
+                "Apple Silicon with only %.0f GB — too little for local LLM",
+                mem_gb,
+            )
+        except ImportError:
+            logger.warning(
+                "Apple Silicon detected but mlx-lm not installed. "
+                "Reinstall: pip install clickmem"
+            )
+        return None
+
+    vram_gb = _get_cuda_vram_gb()
+    if vram_gb > 0:
+        for threshold, model in _CUDA_THRESHOLDS:
+            if vram_gb >= threshold:
+                logger.info(
+                    "Auto-selected %s for %.1f GB CUDA VRAM", model, vram_gb,
+                )
+                return model
+        logger.warning("CUDA GPU with only %.1f GB VRAM — too little for local LLM", vram_gb)
+        return None
+
+    logger.info("No GPU detected — local LLM disabled")
+    return None
+
+
+class LocalLLMEngine:
+    """Local LLM inference engine with automatic backend and model selection.
+
+    Requires GPU acceleration (MLX on Apple Silicon, CUDA on Linux/Windows).
+    CPU-only systems should use remote LLM via CLICKMEM_LLM_MODE=remote.
     """
 
     def __init__(
@@ -38,17 +118,25 @@ class LocalLLMEngine:
         model_name: str | None = None,
         max_tokens: int = 1024,
     ):
-        self._model_name = model_name or os.environ.get(
-            "CLICKMEM_LOCAL_MODEL", _DEFAULT_MODEL
-        )
+        self._explicit_model = model_name or os.environ.get("CLICKMEM_LOCAL_MODEL")
+        self._model_name: str | None = self._explicit_model
         self._max_tokens = max_tokens
         self._backend: str | None = None
         self._generate_fn = None
 
     def load(self) -> None:
-        """Load the model. Tries MLX, then transformers."""
-        errors: list[str] = []
+        """Load the model with GPU auto-detection."""
+        if self._model_name is None:
+            self._model_name = _auto_select_model()
+            if self._model_name is None:
+                raise RuntimeError(
+                    "No GPU available for local LLM inference. "
+                    "ClickMem requires Apple Silicon (MLX) or NVIDIA CUDA for local models. "
+                    "On CPU-only systems, use a remote LLM provider: "
+                    "pip install 'clickmem[llm]' and set CLICKMEM_LLM_MODE=remote"
+                )
 
+        errors: list[str] = []
         for name, loader in [("mlx", self._try_mlx), ("transformers", self._try_transformers)]:
             try:
                 loader()
@@ -60,7 +148,7 @@ class LocalLLMEngine:
 
         raise RuntimeError(
             f"No LLM backend available for {self._model_name}. "
-            "Install mlx-lm (macOS) or transformers+torch.\n"
+            "Install mlx-lm (macOS Apple Silicon) or transformers+torch (CUDA).\n"
             + "\n".join(errors)
         )
 
@@ -70,7 +158,7 @@ class LocalLLMEngine:
 
     @property
     def model_name(self) -> str:
-        return self._model_name
+        return self._model_name or "none"
 
     def complete(self, prompt: str) -> str:
         """Generate a completion for the given prompt."""
@@ -90,7 +178,6 @@ class LocalLLMEngine:
 
         max_tok = self._max_tokens
 
-        # Build a greedy sampler (temperature=0) if the API supports it
         try:
             from mlx_lm.sample_utils import make_sampler
             sampler = make_sampler(temp=0.0)
@@ -115,15 +202,15 @@ class LocalLLMEngine:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        if torch.backends.mps.is_available():
-            device = "mps"
-            dtype = torch.float16
-        elif torch.cuda.is_available():
-            device = "cuda"
-            dtype = torch.float16
-        else:
-            device = "cpu"
-            dtype = torch.float32
+        if not torch.cuda.is_available():
+            # MPS deadlocks in worker threads; CPU is too slow for 2B+ models.
+            raise RuntimeError(
+                "transformers backend requires CUDA. "
+                "On Apple Silicon, install mlx-lm: pip install clickmem"
+            )
+
+        device = "cuda"
+        dtype = torch.float16
 
         tokenizer = AutoTokenizer.from_pretrained(self._model_name)
         if tokenizer.pad_token is None:

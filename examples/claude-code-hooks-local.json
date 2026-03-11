@@ -26,9 +26,10 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:9527/hooks/claude-code",
-            "timeout": 30
+            "type": "command",
+            "command": "curl -s -X POST -H 'Content-Type: application/json' -d @- http://127.0.0.1:9527/hooks/claude-code",
+            "async": true,
+            "timeout": 60
           }
         ]
       }
@@ -37,9 +38,10 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:9527/hooks/claude-code",
-            "timeout": 30
+            "type": "command",
+            "command": "curl -s -X POST -H 'Content-Type: application/json' -d @- http://127.0.0.1:9527/hooks/claude-code",
+            "async": true,
+            "timeout": 60
           }
         ]
       }

@@ -25,9 +25,18 @@ class EmbeddingEngine:
 
     def load(self) -> None:
         from sentence_transformers import SentenceTransformer
+        device = "cpu"
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device = "cuda"
+            # Skip MPS: dispatch_sync deadlocks in asyncio worker threads.
+        except ImportError:
+            pass
         self._model = SentenceTransformer(
             self._model_path,
             truncate_dim=self._target_dimension,
+            device=device,
         )
 
     @property

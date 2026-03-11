@@ -14,6 +14,8 @@ os.environ["CLICKMEM_DB_PATH"] = ":memory:"
 # Use local mode so get_llm_complete() returns None when no model is available
 # (rather than returning a litellm function that fails at call time)
 os.environ.setdefault("CLICKMEM_LLM_MODE", "local")
+# Prevent auto-selection from loading a real (multi-GB) model during tests
+os.environ.setdefault("CLICKMEM_LOCAL_MODEL", "Qwen/Qwen3.5-2B")
 
 import pytest
 

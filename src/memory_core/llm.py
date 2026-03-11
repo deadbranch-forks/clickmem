@@ -36,7 +36,15 @@ def get_llm_complete() -> Optional[Callable[[str], str]]:
     local = _get_local_complete()
     if local is not None:
         return local
-    return _get_remote_complete()
+    remote = _get_remote_complete()
+    if remote is None and _local_engine_failed:
+        logger.warning(
+            "No LLM available — memory extraction and refinement are disabled. "
+            "To enable: (a) use a GPU-equipped machine, or "
+            "(b) pip install 'clickmem[llm]' and set CLICKMEM_LLM_MODE=remote "
+            "with your API key."
+        )
+    return remote
 
 
 def get_llm_mode() -> str:
@@ -50,12 +58,12 @@ def get_llm_info() -> dict:
     info: dict = {"mode": mode}
 
     if mode in ("local", "auto"):
-        model = os.environ.get("CLICKMEM_LOCAL_MODEL", "Qwen/Qwen3.5-2B")
-        info["local_model"] = model
         if _local_engine is not None:
+            info["local_model"] = _local_engine.model_name
             info["local_backend"] = _local_engine.backend
             info["local_loaded"] = True
         else:
+            info["local_model"] = os.environ.get("CLICKMEM_LOCAL_MODEL", "(auto)")
             info["local_loaded"] = False
 
     if mode in ("remote", "auto"):
@@ -87,7 +95,7 @@ def _get_local_complete() -> Optional[Callable[[str], str]]:
         return engine.complete
     except Exception as exc:
         _local_engine_failed = True
-        logger.debug("Local LLM not available: %s", exc)
+        logger.warning("Local LLM not available: %s", exc)
         return None
 
 
