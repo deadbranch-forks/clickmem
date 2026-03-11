@@ -1,31 +1,63 @@
 ## Learned User Preferences
 
-- All config (host, port, paths) must be env-var configurable; never hardcode IPs or machine-specific values
-- CLI must use the API server when running; never directly access chDB from CLI
-- All repo content (docs, comments, code) in English; no Chinese in the repository
-- Prefer event-driven hooks (session boundaries) over periodic cron for maintenance triggers
+**Code quality & process**
+- Product-first: fix code and dependencies for all users; never apply case-by-case machine patches
+- Fix root causes, not symptoms; don't paper over architectural problems with retries or workarounds
 - Avoid unnecessary complexity; revert speculative changes promptly
-- Coordinate parallel sessions: if another session implements a feature, wait for merge before continuing
-- Plan and discuss architecture before coding; don't jump to implementation
-- Deliver plans in current chat mode; don't switch to structured planning mode unless asked
-- Hooks source code lives in project source tree (e.g. `cursor-hooks/`), not under `.cursor/`
-- Keep docs user-focused; don't document internal implementation details that don't help users
+- All config via env vars with sensible defaults; never hardcode IPs or machine-specific values
+- All repo content (docs, comments, code) in English; no Chinese
+- Batch commits by logical grouping; commit and push only when explicitly asked
+- Release only via `git tag v0.x.x && git push origin v0.x.x` (GitHub Actions pipeline); never manual `twine upload`
+
+**Architecture & design**
+- Plan and discuss architecture before coding; deliver plans in current chat mode — don't switch to Plan mode unless asked
+- CLI and plugins must route through the API server; never directly access chDB from CLI
 - Use `asyncio.to_thread()` for all blocking calls (chDB, embedding, LLM) inside the async server
-- Think product-first: fix code and dependencies for all users, never apply case-by-case patches on individual machines
+- Prefer event-driven hooks (session boundaries) over periodic cron to avoid idle token waste
+- Hooks source code lives in project source tree (`cursor-hooks/`), not under `.cursor/`
+- Keep docs user-focused; omit internal implementation details that don't help users
+
+**Workflow**
+- Deploy changes AND verify end-to-end yourself; don't tell the user to verify
+- Stay focused on the current task; don't get sidetracked
+- Coordinate parallel sessions: if another session implements a feature, revert speculative changes and wait for merge
 
 ## Learned Workspace Facts
 
-- ClickMem is a local-first memory system shared by Claude Code, Cursor, OpenClaw via MCP + REST API
-- Three-layer memory: Raw (separate table, append-only) → L1 Episodic → L2 Semantic (most refined at top)
-- L1 episodic memories carry `raw_id` pointing to `raw_transcripts` table for lineage tracking
-- Storage: chDB (embedded ClickHouse), single-process lock per data directory; all access through one server process
-- Table engine: ReplacingMergeTree(updated_at); all SELECTs use FINAL; updates via INSERT, no ALTER mutations in hot paths
-- Server: REST + MCP SSE on single port 9527; MCP stdio for local; mDNS `_clickmem._tcp` for LAN discovery; Bearer auth
-- Local LLM auto-selects model by GPU memory: Apple Silicon MLX (8GB→2B, 16GB→4B, 32GB→9B), CUDA (4GB→2B, 8GB→4B, 16GB→9B); CPU-only disables local LLM and falls back to remote API; override via `CLICKMEM_LOCAL_MODEL`
-- Embedding: Qwen3-Embedding-0.6B (256d) on CPU or CUDA; never use PyTorch MPS (deadlocks in asyncio worker threads via GCD `dispatch_sync`)
-- Retrieval: vector + keyword hybrid search, MMR dedup (threshold 0.92), semantic boost 1.3x, refinement boost 1.15x
-- `pip install clickmem` includes all required deps (server, mlx-lm on macOS ARM64); only `litellm` for remote LLM is optional
-- Config env vars: `CLICKMEM_SERVER_HOST`, `CLICKMEM_SERVER_PORT` (default 127.0.0.1:9527), `CLICKMEM_REMOTE`, `CLICKMEM_LLM_MODE`, `CLICKMEM_LOCAL_MODEL`, `CLICKMEM_REFINE_THRESHOLD` (default 1)
-- Deploy target: Mac Mini (`mini.local`) via Tailscale; rsync to `~/clickmem`
-- Tests use MockEmbeddingEngine and MockLLMComplete via conftest fixtures; `CLICKMEM_LOCAL_MODEL` pinned to 2B in tests to prevent auto-selecting large models; all tests use in-memory chDB
-- PyPI package name: `clickmem`
+**Product**
+- ClickMem: local-first memory system for AI coding agents; shared by Claude Code, Cursor, OpenClaw via MCP + REST API
+- Memory layers: Raw (separate append-only table) → L1 Episodic (`raw_id` links to `raw_transcripts`) → L2 Semantic (most refined, at top)
+
+**Storage**
+- chDB (embedded ClickHouse); single-process lock per data dir; all access through one server process
+- `ReplacingMergeTree(updated_at)` engine; all SELECTs use `FINAL`; updates via INSERT; no ALTER mutations in hot paths
+
+**Server**
+- Single port 9527: REST `/v1/*` + MCP SSE `/sse` + MCP stdio (`clickmem-mcp`) for local
+- LAN discovery via mDNS `_clickmem._tcp`; Bearer auth via `CLICKMEM_API_KEY`
+
+**LLM & embedding**
+- Local LLM auto-selects by GPU memory: Apple Silicon MLX (8GB→2B, 16GB→4B, 32GB→9B), CUDA (4GB→2B, 8GB→4B, 16GB→9B); CPU-only falls back to remote API; override via `CLICKMEM_LOCAL_MODEL`
+- Embedding: Qwen3-Embedding-0.6B (256 dims) on CPU or CUDA; **never** PyTorch MPS (deadlocks via GCD `dispatch_sync` in asyncio worker threads)
+
+**Retrieval**
+- Hybrid vector + keyword search; MMR dedup (threshold 0.92); semantic boost 1.3x, refinement boost 1.15x
+- `access_count` popularity boost (log scale); `entities` field participates in keyword matching
+
+**Distribution & CI**
+- PyPI package: `clickmem`; `pip install clickmem` includes all deps (mlx-lm on macOS ARM64); only `litellm` is optional (`pip install 'clickmem[llm]'`)
+- CI: `ci.yml` tests on push/PR (Python 3.10/3.12/3.13); `release.yml` publishes on `v*` tags via Trusted Publisher
+
+**Config env vars**
+- `CLICKMEM_SERVER_HOST`, `CLICKMEM_SERVER_PORT` (default 9527)
+- `CLICKMEM_REMOTE` — remote server URL; makes CLI/MCP act as pure client
+- `CLICKMEM_API_KEY` — Bearer token auth
+- `CLICKMEM_DB_PATH` (default `~/.openclaw/memory/chdb-data`)
+- `CLICKMEM_LLM_MODE` (`auto`|`local`|`remote`), `CLICKMEM_LLM_MODEL`, `CLICKMEM_LOCAL_MODEL`
+- `CLICKMEM_REFINE_THRESHOLD` (default 1), `CLICKMEM_LOG_LEVEL`
+
+**Testing**
+- Mocks: `MockEmbeddingEngine` + `MockLLMComplete` via conftest fixtures; `CLICKMEM_LOCAL_MODEL` pinned to 2B; all tests use in-memory chDB
+
+**Deploy**
+- Target: Mac Mini M4 32GB (`mini.local`) via Tailscale; rsync to `~/clickmem`; launchd service with auto-restart
