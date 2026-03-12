@@ -13,15 +13,24 @@ if TYPE_CHECKING:
 _EXTRACT_PROMPT = """\
 Extract important facts from this conversation as structured memories.
 
+Focus on:
+- Identity & career: name, role, employer, career history
+- Projects: repos, tech stack, architecture decisions
+- Technical preferences: languages, frameworks, tools, workflows
+- Personal traits: interests, habits, hobbies
+- Social context: colleagues, communities, conferences
+
+For each memory choose:
+- layer: "semantic" (durable facts: identity, preferences, skills) or "episodic" (session-specific events/decisions)
+- category: decision | preference | event | person | project | knowledge | todo | insight
+
+Prefer "semantic" for facts that remain true across sessions.
+
 Conversation:
 {conversation}
 
-For each memory choose:
-- layer: "working" (current focus), "episodic" (event/decision), or "semantic" (durable fact)
-- category: decision | preference | event | person | project | knowledge | todo | insight
-
 Return ONLY a JSON array. Example:
-[{{"content": "Team decided to use PostgreSQL", "layer": "episodic", "category": "decision", "tags": ["database"], "entities": ["PostgreSQL"]}}]
+[{{"content": "User is a backend engineer who prefers Python for prototyping and Rust for production", "layer": "semantic", "category": "preference", "tags": ["language"], "entities": ["Python", "Rust"]}}]
 """
 
 _EMERGENCY_PROMPT = """\
@@ -57,6 +66,8 @@ class MemoryExtractor:
         conversation = "\n".join(
             f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages
         )
+        if conversation.count("[object Object]") >= 2:
+            return []
         prompt = _EXTRACT_PROMPT.format(conversation=conversation)
         raw_response = llm_complete(prompt)
 

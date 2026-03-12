@@ -72,6 +72,8 @@ async def list_tools() -> list[Tool]:
                     "layer": {"type": "string", "description": "Filter by layer: episodic, semantic, or null for all", "enum": ["episodic", "semantic"]},
                     "category": {"type": "string", "description": "Filter by category"},
                     "max_content_length": {"type": "integer", "description": "Truncate content to this many chars (default: 800, 0=no limit)", "default": 800},
+                    "since": {"type": "string", "description": "ISO-8601 datetime — only return memories created at or after this time (e.g. '2026-03-12T10:00:00Z')"},
+                    "until": {"type": "string", "description": "ISO-8601 datetime — only return memories created at or before this time"},
                 },
                 "required": ["query"],
             },
@@ -146,6 +148,22 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="clickmem_list",
+            description="Browse and list memories with optional filtering, pagination, and sorting. Unlike recall (semantic search), this returns memories in chronological order. Use for 'show all memories', 'recent memories', or browsing by layer/category.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "layer": {"type": "string", "description": "Filter by layer", "enum": ["episodic", "semantic"]},
+                    "category": {"type": "string", "description": "Filter by category (e.g. preference, person, project, knowledge)"},
+                    "limit": {"type": "integer", "description": "Max results (default: 20)", "default": 20},
+                    "offset": {"type": "integer", "description": "Skip first N results for pagination (default: 0)", "default": 0},
+                    "sort_by": {"type": "string", "description": "Sort field", "enum": ["created_at", "accessed_at", "updated_at", "access_count"], "default": "created_at"},
+                    "since": {"type": "string", "description": "ISO-8601 datetime — only show memories created at or after this time"},
+                    "until": {"type": "string", "description": "ISO-8601 datetime — only show memories created at or before this time"},
+                },
+            },
+        ),
     ]
 
 
@@ -158,6 +176,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             top_k=arguments.get("top_k", 10),
             layer=arguments.get("layer"),
             category=arguments.get("category"),
+            since=arguments.get("since"),
+            until=arguments.get("until"),
         )
         results = await asyncio.to_thread(
             t.recall, arguments["query"], cfg=cfg,
@@ -219,6 +239,29 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if working:
             return [TextContent(type="text", text=str(working))]
         return [TextContent(type="text", text="No working memory set.")]
+
+    if name == "clickmem_list":
+        memories = await asyncio.to_thread(
+            t.list_memories,
+            layer=arguments.get("layer"),
+            category=arguments.get("category"),
+            limit=arguments.get("limit", 20),
+            offset=arguments.get("offset", 0),
+            sort_by=arguments.get("sort_by", "created_at"),
+            since=arguments.get("since"),
+            until=arguments.get("until"),
+        )
+        if not memories:
+            return [TextContent(type="text", text="No memories found.")]
+        lines = []
+        for m in memories:
+            if hasattr(m, "content"):
+                ts = m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else "?"
+                lines.append(f"[{ts}] [{m.layer}/{m.category}] {m.content}")
+            else:
+                ts = m.get("created_at", "?")
+                lines.append(f"[{ts}] [{m.get('layer', '')}/{m.get('category', '')}] {m.get('content', '')}")
+        return [TextContent(type="text", text=f"Found {len(memories)} memories:\n\n" + "\n".join(lines))]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

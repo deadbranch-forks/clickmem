@@ -46,3 +46,5 @@ class RetrievalConfig:
     refinement_boost: float = 1.15
     layer: Optional[str] = None  # filter by layer; None = all applicable
     category: Optional[str] = None  # filter by category; None = all
+    since: Optional[str] = None  # ISO-8601 datetime, filter created_at >=
+    until: Optional[str] = None  # ISO-8601 datetime, filter created_at <=

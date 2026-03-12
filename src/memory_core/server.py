@@ -30,6 +30,8 @@ class RecallRequest(BaseModel):
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
     layer: Optional[str] = None
     category: Optional[str] = None
+    since: Optional[str] = None
+    until: Optional[str] = None
 
 
 class RememberRequest(BaseModel):
@@ -143,6 +145,8 @@ async def recall(req: RecallRequest):
         top_k=req.top_k,
         layer=req.layer,
         category=req.category,
+        since=req.since,
+        until=req.until,
     )
     results = await asyncio.to_thread(t.recall, req.query, cfg=cfg, min_score=req.min_score)
     return {"memories": results}
@@ -203,6 +207,36 @@ async def review(layer: str = "semantic", limit: int = 100):
     return {"layer": layer, "memories": memories}
 
 
+@app.get("/v1/list", dependencies=[Depends(auth_dep)])
+async def list_memories(
+    layer: Optional[str] = None,
+    category: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    sort_by: str = "created_at",
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+):
+    t = _get_transport()
+    memories = await asyncio.to_thread(
+        t.list_memories,
+        layer=layer, category=category, limit=limit, offset=offset,
+        sort_by=sort_by, since=since, until=until,
+    )
+    result = []
+    for m in memories:
+        if hasattr(m, "content"):
+            result.append({
+                "id": m.id, "layer": m.layer, "category": m.category,
+                "content": m.content, "tags": m.tags, "entities": m.entities,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "access_count": m.access_count,
+            })
+        else:
+            result.append(m)
+    return {"memories": result, "count": len(result)}
+
+
 @app.api_route("/v1/status", methods=["GET", "POST"], dependencies=[Depends(auth_dep)])
 async def status():
     t = _get_transport()
@@ -215,10 +249,18 @@ async def maintain(req: MaintainRequest):
     return await asyncio.to_thread(t.maintain, dry_run=req.dry_run)
 
 
+_READONLY_SQL_PREFIXES = ("SELECT", "SHOW", "DESCRIBE", "EXISTS", "EXPLAIN")
+
+
 @app.post("/v1/sql", dependencies=[Depends(auth_dep)])
 async def sql(req: SqlRequest):
-    if not _debug_mode:
-        raise HTTPException(status_code=403, detail="SQL endpoint requires --debug mode")
+    normalized = req.query.strip().upper().split()[0] if req.query.strip() else ""
+    is_readonly = normalized in _READONLY_SQL_PREFIXES
+    if not is_readonly and not _debug_mode:
+        raise HTTPException(
+            status_code=403,
+            detail="Write SQL requires --debug mode. Read-only queries (SELECT/SHOW/DESCRIBE) are always allowed.",
+        )
     t = _get_transport()
     try:
         results = await asyncio.to_thread(t.sql, req.query)

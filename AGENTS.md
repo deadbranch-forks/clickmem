@@ -11,7 +11,7 @@
 
 **Architecture & design**
 - Plan and discuss architecture before coding; deliver plans in current chat mode — don't switch to Plan mode unless asked
-- CLI and plugins must route through the API server; never directly access chDB from CLI
+- All interfaces (CLI, MCP tools, plugins) must expose the same capabilities as the HTTP API; never access chDB directly or leave endpoints HTTP-only
 - Use `asyncio.to_thread()` for all blocking calls (chDB, embedding, LLM) inside the async server
 - Prefer event-driven hooks (session boundaries) over periodic cron to avoid idle token waste
 - Hooks source code lives in project source tree (`cursor-hooks/`), not under `.cursor/`
@@ -35,13 +35,15 @@
 **Server**
 - Single port 9527: REST `/v1/*` + MCP SSE `/sse` + MCP stdio (`clickmem-mcp`) for local
 - LAN discovery via mDNS `_clickmem._tcp`; Bearer auth via `CLICKMEM_API_KEY`
+- Read-only SQL (`SELECT`/`SHOW`/`DESCRIBE`) allowed without `--debug`; write queries require `--debug`
 
 **LLM & embedding**
 - Local LLM auto-selects by GPU memory: Apple Silicon MLX (8GB→2B, 16GB→4B, 32GB→9B), CUDA (4GB→2B, 8GB→4B, 16GB→9B); CPU-only falls back to remote API; override via `CLICKMEM_LOCAL_MODEL`
 - Embedding: Qwen3-Embedding-0.6B (256 dims) on CPU or CUDA; **never** PyTorch MPS (deadlocks via GCD `dispatch_sync` in asyncio worker threads)
 
 **Retrieval**
-- Hybrid vector + keyword search; MMR dedup (threshold 0.92); semantic boost 1.3x, refinement boost 1.15x
+- Hybrid vector + keyword search with `since`/`until` time filtering; MMR dedup (threshold 0.92); semantic boost 1.3x, refinement boost 1.15x
+- `clickmem_list` MCP tool for chronological browsing with layer/category/time filters and pagination
 - `access_count` popularity boost (log scale); `entities` field participates in keyword matching
 
 **Distribution & CI**

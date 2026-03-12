@@ -295,10 +295,27 @@ class MemoryDB:
 
     # -- Queries -----------------------------------------------------------
 
-    def list_by_layer(self, layer: str, *, limit: int = 100) -> list[Memory]:
+    def _time_conditions(self, since: str | None, until: str | None) -> list[str]:
+        """Build SQL WHERE clauses for time filtering.
+
+        Validates input looks like a datetime to prevent injection.
+        """
+        import re
+        _dt_re = re.compile(r"^\d{4}-\d{2}-\d{2}[\sT]?\d{0,2}:?\d{0,2}:?\d{0,2}")
+        conds: list[str] = []
+        if since and _dt_re.match(since):
+            conds.append(f"created_at >= '{self._escape(since)}'")
+        if until and _dt_re.match(until):
+            conds.append(f"created_at <= '{self._escape(until)}'")
+        return conds
+
+    def list_by_layer(self, layer: str, *, limit: int = 100,
+                      since: str | None = None, until: str | None = None) -> list[Memory]:
+        conds = [f"layer = '{self._escape(layer)}'", "is_active = 1"]
+        conds.extend(self._time_conditions(since, until))
+        where = " AND ".join(conds)
         rows = self._query_json(
-            f"SELECT * FROM memories FINAL "
-            f"WHERE layer = '{self._escape(layer)}' AND is_active = 1 "
+            f"SELECT * FROM memories FINAL WHERE {where} "
             f"ORDER BY created_at DESC LIMIT {limit}"
         )
         return [self._row_to_memory(r) for r in rows]
@@ -309,6 +326,8 @@ class MemoryDB:
         layer: str,
         *,
         limit: int = 200,
+        since: str | None = None,
+        until: str | None = None,
     ) -> list[Memory]:
         """Pre-filter candidates by cosineDistance at the SQL level.
 
@@ -317,12 +336,43 @@ class MemoryDB:
         closest ``limit`` rows.
         """
         vec_literal = self._float_array_literal(query_vec)
+        conds = [
+            f"layer = '{self._escape(layer)}'",
+            "is_active = 1",
+            "length(embedding) > 0",
+        ]
+        conds.extend(self._time_conditions(since, until))
+        where = " AND ".join(conds)
         rows = self._query_json(
             f"SELECT *, cosineDistance(embedding, {vec_literal}) AS _dist "
-            f"FROM memories FINAL "
-            f"WHERE layer = '{self._escape(layer)}' AND is_active = 1 "
-            f"AND length(embedding) > 0 "
+            f"FROM memories FINAL WHERE {where} "
             f"ORDER BY _dist ASC LIMIT {limit}"
+        )
+        return [self._row_to_memory(r) for r in rows]
+
+    def list_memories(
+        self,
+        *,
+        layer: str | None = None,
+        category: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_by: str = "created_at",
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[Memory]:
+        """Flexible memory listing with optional filters, pagination, and sorting."""
+        conds = ["is_active = 1"]
+        if layer:
+            conds.append(f"layer = '{self._escape(layer)}'")
+        if category:
+            conds.append(f"category = '{self._escape(category)}'")
+        conds.extend(self._time_conditions(since, until))
+        sort_col = sort_by if sort_by in ("created_at", "accessed_at", "updated_at", "access_count") else "created_at"
+        where = " AND ".join(conds)
+        rows = self._query_json(
+            f"SELECT * FROM memories FINAL WHERE {where} "
+            f"ORDER BY {sort_col} DESC LIMIT {limit} OFFSET {offset}"
         )
         return [self._row_to_memory(r) for r in rows]
 

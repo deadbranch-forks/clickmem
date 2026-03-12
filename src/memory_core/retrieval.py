@@ -184,9 +184,11 @@ def hybrid_search(
     candidates: list[dict] = []
     for layer in layers:
         if query_vec:
-            memories = db.search_by_vector(query_vec, layer, limit=200)
+            memories = db.search_by_vector(query_vec, layer, limit=200,
+                                           since=cfg.since, until=cfg.until)
         else:
-            memories = db.list_by_layer(layer, limit=200)
+            memories = db.list_by_layer(layer, limit=200,
+                                        since=cfg.since, until=cfg.until)
         for m in memories:
             if cfg.category and m.category != cfg.category:
                 continue

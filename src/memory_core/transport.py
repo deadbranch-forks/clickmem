@@ -35,6 +35,10 @@ class Transport(Protocol):
 
     def review(self, layer: str = "semantic", limit: int = 100) -> list[Memory] | str | None: ...
 
+    def list_memories(self, *, layer: str | None = None, category: str | None = None,
+                      limit: int = 50, offset: int = 0, sort_by: str = "created_at",
+                      since: str | None = None, until: str | None = None) -> list: ...
+
     def status(self) -> dict: ...
 
     def maintain(self, dry_run: bool = False) -> dict: ...
@@ -154,9 +158,16 @@ class LocalTransport:
             llm_complete, session_id=session_id,
         )
 
+    _GARBAGE_PATTERN_THRESHOLD = 2
+
     def ingest(self, text: str, session_id: str = "",
                source: str = "cursor") -> dict:
         """Raw-first ingestion: store raw transcript, then extract memories."""
+        if text.count("[object Object]") >= self._GARBAGE_PATTERN_THRESHOLD:
+            _log.warning("Rejecting ingest: text contains %d '[object Object]' — likely serialization bug in client",
+                         text.count("[object Object]"))
+            return {"error": "rejected", "reason": "text contains unserialized JS objects"}
+
         db = self._get_db()
         emb = self._get_emb()
 
@@ -250,6 +261,15 @@ class LocalTransport:
         if layer == "working":
             return db.get_working()
         return db.list_by_layer(layer, limit=limit)
+
+    def list_memories(self, *, layer: str | None = None, category: str | None = None,
+                      limit: int = 50, offset: int = 0, sort_by: str = "created_at",
+                      since: str | None = None, until: str | None = None) -> list[Memory]:
+        db = self._get_db()
+        return db.list_memories(
+            layer=layer, category=category, limit=limit, offset=offset,
+            sort_by=sort_by, since=since, until=until,
+        )
 
     def status(self) -> dict:
         db = self._get_db()
@@ -360,6 +380,21 @@ class RemoteTransport:
         data = self._get("/v1/review", params={"layer": layer, "limit": limit})
         if layer == "working":
             return data.get("content")
+        return data.get("memories", [])
+
+    def list_memories(self, *, layer: str | None = None, category: str | None = None,
+                      limit: int = 50, offset: int = 0, sort_by: str = "created_at",
+                      since: str | None = None, until: str | None = None) -> list:
+        params = {"limit": limit, "offset": offset, "sort_by": sort_by}
+        if layer:
+            params["layer"] = layer
+        if category:
+            params["category"] = category
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        data = self._get("/v1/list", params=params)
         return data.get("memories", [])
 
     def status(self) -> dict:

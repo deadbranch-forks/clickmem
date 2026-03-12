@@ -245,8 +245,13 @@ class TestExtract:
 
 
 class TestSql:
-    def test_sql_blocked_without_debug(self, client):
+    def test_readonly_sql_allowed_without_debug(self, client):
         resp = client.post("/v1/sql", json={"query": "SELECT 1"})
+        assert resp.status_code == 200
+        assert "results" in resp.json()
+
+    def test_write_sql_blocked_without_debug(self, client):
+        resp = client.post("/v1/sql", json={"query": "INSERT INTO memories VALUES ()"})
         assert resp.status_code == 403
 
     def test_sql_works_in_debug_mode(self, client):

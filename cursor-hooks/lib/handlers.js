@@ -21,6 +21,13 @@ function _log(msg) {
   process.stderr.write(`[clickmem-hook] ${msg}\n`);
 }
 
+function _asText(val) {
+  if (val === null || val === undefined) return "";
+  if (typeof val === "string") return val;
+  if (Array.isArray(val)) return val.map(_asText).join("\n");
+  return JSON.stringify(val);
+}
+
 // ─── sessionStart ────────────────────────────────────────────────────
 // Recall relevant memories based on workspace, inject as initial context.
 
@@ -55,7 +62,7 @@ export async function handleSessionStart(input) {
 export async function handleBeforeSubmitPrompt(input) {
   const key = _bufKey(input.conversation_id);
   _conversationBuffers.set(key, {
-    prompt: input.prompt || "",
+    prompt: _asText(input.prompt),
     model: input.model,
     ts: Date.now(),
   });
@@ -68,7 +75,7 @@ export async function handleBeforeSubmitPrompt(input) {
 export async function handleAfterAgentResponse(input) {
   const key = _bufKey(input.conversation_id);
   const buf = _conversationBuffers.get(key);
-  const responseText = input.text || "";
+  const responseText = _asText(input.text);
 
   if (!responseText || responseText.length < 20) return null;
 
