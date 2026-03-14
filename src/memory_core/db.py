@@ -295,6 +295,19 @@ class MemoryDB:
 
     # -- Queries -----------------------------------------------------------
 
+    @staticmethod
+    def _normalize_datetime(dt_str: str) -> str:
+        """Normalize ISO-8601 datetime to ClickHouse-compatible format.
+
+        Handles 'T' separator, trailing 'Z', and timezone offsets like +00:00.
+        """
+        import re
+        s = dt_str.replace("T", " ")
+        if s.endswith("Z"):
+            s = s[:-1]
+        s = re.sub(r'[+-]\d{2}:?\d{2}$', '', s)
+        return s.strip()
+
     def _time_conditions(self, since: str | None, until: str | None) -> list[str]:
         """Build SQL WHERE clauses for time filtering.
 
@@ -304,9 +317,11 @@ class MemoryDB:
         _dt_re = re.compile(r"^\d{4}-\d{2}-\d{2}[\sT]?\d{0,2}:?\d{0,2}:?\d{0,2}")
         conds: list[str] = []
         if since and _dt_re.match(since):
-            conds.append(f"created_at >= '{self._escape(since)}'")
+            normalized = self._normalize_datetime(since)
+            conds.append(f"created_at >= '{self._escape(normalized)}'")
         if until and _dt_re.match(until):
-            conds.append(f"created_at <= '{self._escape(until)}'")
+            normalized = self._normalize_datetime(until)
+            conds.append(f"created_at <= '{self._escape(normalized)}'")
         return conds
 
     def list_by_layer(self, layer: str, *, limit: int = 100,

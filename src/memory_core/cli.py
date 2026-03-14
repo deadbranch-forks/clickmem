@@ -35,6 +35,7 @@ _DB_PATH = os.environ.get("CLICKMEM_DB_PATH", os.path.expanduser("~/.openclaw/me
 
 _remote_url: str | None = None
 _remote_api_key: str | None = None
+_force_local: bool = False
 
 
 @app.callback()
@@ -47,10 +48,15 @@ def _global_options(
         None, "--api-key", envvar="CLICKMEM_API_KEY",
         help="API key for remote server authentication.",
     ),
+    local: bool = typer.Option(
+        False, "--local",
+        help="Use embedded database directly (no server needed).",
+    ),
 ):
-    global _remote_url, _remote_api_key
+    global _remote_url, _remote_api_key, _force_local
     _remote_url = remote
     _remote_api_key = api_key
+    _force_local = local
 
 
 # ---------------------------------------------------------------------------
@@ -60,11 +66,31 @@ def _global_options(
 _transport_instance = None
 
 
+def _has_remote_config() -> bool:
+    """Check if the user has explicitly configured a remote server."""
+    return bool(
+        _remote_url
+        or os.environ.get("CLICKMEM_REMOTE")
+        or os.environ.get("CLICKMEM_SERVER_HOST")
+    )
+
+
 def _get_transport():
     global _transport_instance
     if _transport_instance is None:
-        from memory_core.transport import get_transport
-        _transport_instance = get_transport(remote=_remote_url, api_key=_remote_api_key)
+        if _force_local:
+            from memory_core.transport import LocalTransport
+            _transport_instance = LocalTransport()
+        else:
+            from memory_core.transport import get_transport
+            try:
+                _transport_instance = get_transport(remote=_remote_url, api_key=_remote_api_key)
+            except RuntimeError:
+                if _has_remote_config():
+                    raise
+                print("[clickmem] No server found, using local database.", file=sys.stderr)
+                from memory_core.transport import LocalTransport
+                _transport_instance = LocalTransport()
     return _transport_instance
 
 

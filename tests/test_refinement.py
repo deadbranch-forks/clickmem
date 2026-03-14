@@ -10,6 +10,77 @@ from memory_core.models import Memory
 from memory_core.refinement import ContinualRefinement
 
 
+class TestDedupExactText:
+    """Test exact-text deduplication in the semantic layer."""
+
+    def test_dedup_removes_exact_duplicates(self, db, mock_emb):
+        """Three identical semantic memories → dedup keeps 1, deactivates 2."""
+        for _ in range(3):
+            m = Memory(
+                content="The team regularly uses microservices.",
+                layer="semantic",
+                embedding=mock_emb.encode_document("The team regularly uses microservices."),
+            )
+            db.insert(m)
+
+        active_before = db.list_by_layer("semantic")
+        assert len(active_before) == 3
+
+        deduped = ContinualRefinement._dedup_exact_text(db)
+        assert deduped == 2
+
+        active_after = db.list_by_layer("semantic")
+        assert len(active_after) == 1
+        assert active_after[0].content == "The team regularly uses microservices."
+
+    def test_dedup_ignores_different_content(self, db, mock_emb):
+        """Distinct content should not be deduped."""
+        for content in ["Fact A", "Fact B", "Fact C"]:
+            m = Memory(
+                content=content,
+                layer="semantic",
+                embedding=mock_emb.encode_document(content),
+            )
+            db.insert(m)
+
+        deduped = ContinualRefinement._dedup_exact_text(db)
+        assert deduped == 0
+
+        active = db.list_by_layer("semantic")
+        assert len(active) == 3
+
+    def test_dedup_case_insensitive(self, db, mock_emb):
+        """Dedup should be case-insensitive."""
+        for content in ["User prefers Python", "user prefers python"]:
+            m = Memory(
+                content=content,
+                layer="semantic",
+                embedding=mock_emb.encode_document(content),
+            )
+            db.insert(m)
+
+        deduped = ContinualRefinement._dedup_exact_text(db)
+        assert deduped == 1
+
+        active = db.list_by_layer("semantic")
+        assert len(active) == 1
+
+    def test_run_includes_exact_deduped(self, db, mock_emb, mock_llm):
+        """run() result dict should include exact_deduped count."""
+        for _ in range(2):
+            m = Memory(
+                content="Duplicate fact",
+                layer="semantic",
+                embedding=mock_emb.encode_document("Duplicate fact"),
+                source="agent",
+            )
+            db.insert(m)
+
+        result = ContinualRefinement.run(db, mock_emb, mock_llm)
+        assert "exact_deduped" in result
+        assert result["exact_deduped"] >= 1
+
+
 class TestClusterSemantic:
     """Test semantic clustering of L2 memories."""
 

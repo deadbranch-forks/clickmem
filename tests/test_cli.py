@@ -253,6 +253,33 @@ class TestSqlCommand:
         assert result.exit_code != 0 or "error" in result.stdout.lower()
 
 
+class TestLocalFallback:
+    """Test --local flag and auto-fallback behavior."""
+
+    def test_local_flag_status(self):
+        """memory --local status works without a running server."""
+        result = runner.invoke(app, ["--local", "status"])
+        assert result.exit_code == 0
+        output = result.stdout.lower()
+        assert "working" in output or "l0" in output
+
+    def test_local_flag_status_json(self):
+        """memory --local status --json returns valid JSON."""
+        result = runner.invoke(app, ["--local", "status", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert isinstance(data, dict)
+        assert "counts" in data
+
+    def test_auto_fallback_when_no_server(self):
+        """Without --remote and without a server, CLI auto-falls back to local."""
+        import memory_core.cli as cli_mod
+        cli_mod._transport_instance = None
+        cli_mod._force_local = False
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+
+
 class TestMaintainCommand:
     """Test `memory maintain` command."""
 

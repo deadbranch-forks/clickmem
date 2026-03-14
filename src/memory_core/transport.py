@@ -143,6 +143,8 @@ class LocalTransport:
         llm_complete = get_llm_complete()
 
         if llm_complete is None:
+            if "[object Object]" in text:
+                return []
             m = Memory(
                 content=text, layer="episodic", category="event",
                 embedding=emb.encode_document(text),
@@ -158,7 +160,7 @@ class LocalTransport:
             llm_complete, session_id=session_id,
         )
 
-    _GARBAGE_PATTERN_THRESHOLD = 2
+    _GARBAGE_PATTERN_THRESHOLD = 1
 
     def ingest(self, text: str, session_id: str = "",
                source: str = "cursor") -> dict:

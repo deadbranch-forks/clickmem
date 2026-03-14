@@ -463,6 +463,56 @@ class TestSearchByVector:
         assert all(len(r.embedding) > 0 for r in results)
 
 
+class TestTimeConditionsISO8601:
+    """Test ISO-8601 datetime parsing in _time_conditions."""
+
+    def test_iso8601_with_t_and_z(self, db):
+        """since='2026-03-13T00:00:00Z' should be accepted and normalized."""
+        m = make_memory(
+            layer="semantic",
+            created_at=datetime(2026, 3, 14, tzinfo=timezone.utc),
+        )
+        db.insert(m)
+        results = db.list_memories(since="2026-03-13T00:00:00Z")
+        assert len(results) == 1
+
+    def test_iso8601_with_timezone_offset(self, db):
+        """since='2026-03-13T00:00:00+00:00' should be accepted."""
+        m = make_memory(
+            layer="semantic",
+            created_at=datetime(2026, 3, 14, tzinfo=timezone.utc),
+        )
+        db.insert(m)
+        results = db.list_memories(since="2026-03-13T00:00:00+00:00")
+        assert len(results) == 1
+
+    def test_iso8601_until_with_t_and_z(self, db):
+        """until='2026-03-15T00:00:00Z' should be accepted."""
+        m = make_memory(
+            layer="semantic",
+            created_at=datetime(2026, 3, 14, tzinfo=timezone.utc),
+        )
+        db.insert(m)
+        results = db.list_memories(until="2026-03-15T00:00:00Z")
+        assert len(results) == 1
+
+    def test_plain_datetime_still_works(self, db):
+        """Plain 'YYYY-MM-DD HH:MM:SS' format should still work."""
+        m = make_memory(
+            layer="semantic",
+            created_at=datetime(2026, 3, 14, tzinfo=timezone.utc),
+        )
+        db.insert(m)
+        results = db.list_memories(since="2026-03-13 00:00:00")
+        assert len(results) == 1
+
+    def test_normalize_datetime_static(self, db):
+        """_normalize_datetime properly converts ISO-8601 variants."""
+        assert db._normalize_datetime("2026-03-13T00:00:00Z") == "2026-03-13 00:00:00"
+        assert db._normalize_datetime("2026-03-13T10:30:00+05:30") == "2026-03-13 10:30:00"
+        assert db._normalize_datetime("2026-03-13 12:00:00") == "2026-03-13 12:00:00"
+
+
 class TestRawQuery:
     """Test raw SQL query execution."""
 

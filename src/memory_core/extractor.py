@@ -66,7 +66,7 @@ class MemoryExtractor:
         conversation = "\n".join(
             f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages
         )
-        if conversation.count("[object Object]") >= 2:
+        if "[object Object]" in conversation:
             return []
         prompt = _EXTRACT_PROMPT.format(conversation=conversation)
         raw_response = llm_complete(prompt)
@@ -82,13 +82,21 @@ class MemoryExtractor:
                     ids.append(rows[0].id)
                 continue
 
+            content = mem_data.get("content", "")
+            # Proactive dedup: skip if identical content already exists in this layer
+            existing = self._db.list_by_layer(layer, limit=100)
+            dup = next((e for e in existing if e.content.strip().lower() == content.strip().lower()), None)
+            if dup:
+                ids.append(dup.id)
+                continue
+
             m = Memory(
-                content=mem_data.get("content", ""),
+                content=content,
                 layer=layer,
                 category=mem_data.get("category", "event"),
                 tags=mem_data.get("tags", []),
                 entities=mem_data.get("entities", []),
-                embedding=self._emb.encode_document(mem_data.get("content", "")),
+                embedding=self._emb.encode_document(content),
                 session_id=session_id,
                 source="agent",
                 raw_id=raw_id or None,

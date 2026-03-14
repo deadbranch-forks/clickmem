@@ -24,6 +24,7 @@ function _log(msg) {
 function _asText(val) {
   if (val === null || val === undefined) return "";
   if (typeof val === "string") return val;
+  if (typeof val === "object" && !Array.isArray(val) && typeof val.text === "string") return val.text;
   if (Array.isArray(val)) return val.map(_asText).join("\n");
   return JSON.stringify(val);
 }

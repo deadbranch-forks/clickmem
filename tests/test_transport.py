@@ -120,6 +120,18 @@ class TestLocalTransport:
         assert isinstance(ids, list)
         assert len(ids) >= 1
 
+    def test_extract_rejects_single_object_object(self, transport, monkeypatch):
+        """A single [object Object] is garbage — extract() no-LLM path should reject it."""
+        monkeypatch.setattr("memory_core.llm.get_llm_complete", lambda: None)
+        ids = transport.extract("user: [object Object]")
+        assert ids == []
+
+    def test_ingest_rejects_single_object_object(self, transport, monkeypatch):
+        """ingest() should reject text with even a single [object Object]."""
+        monkeypatch.setattr("memory_core.llm.get_llm_complete", lambda: None)
+        result = transport.ingest("user: [object Object]\nassistant: Hello")
+        assert result.get("error") == "rejected"
+
 
 class TestGetTransport:
     """Test the get_transport factory function.

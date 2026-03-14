@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
 from memory_core.json_utils import extract_json_or
@@ -82,11 +83,13 @@ class ContinualRefinement:
         llm_complete: Callable[[str], str],
     ) -> dict:
         _log.info("Starting continual refinement")
+        exact_deduped = ContinualRefinement._dedup_exact_text(db)
         reextracted = ContinualRefinement._reextract_unprocessed(db, emb, llm_complete)
         clusters = ContinualRefinement._cluster_semantic(db, emb)
         merged = ContinualRefinement._refine_clusters(db, emb, llm_complete, clusters)
         pruned = ContinualRefinement._prune_low_quality(db, llm_complete)
         result = {
+            "exact_deduped": exact_deduped,
             "reextracted": reextracted,
             "clusters_found": len(clusters),
             "merged": merged,
@@ -94,6 +97,27 @@ class ContinualRefinement:
         }
         _log.info("Refinement complete: %s", result)
         return result
+
+    @staticmethod
+    def _dedup_exact_text(db: "MemoryDB") -> int:
+        """Remove exact-text duplicates in the semantic layer.
+
+        Keeps the oldest memory (by created_at) and deactivates newer copies.
+        """
+        memories = db.list_by_layer("semantic", limit=500)
+        content_groups: dict[str, list[Memory]] = {}
+        for m in memories:
+            key = m.content.strip().lower()
+            content_groups.setdefault(key, []).append(m)
+        deduped = 0
+        for group in content_groups.values():
+            if len(group) < 2:
+                continue
+            group.sort(key=lambda m: m.created_at or datetime.min)
+            for dup in group[1:]:
+                db.deactivate(dup.id)
+                deduped += 1
+        return deduped
 
     @staticmethod
     def _reextract_unprocessed(

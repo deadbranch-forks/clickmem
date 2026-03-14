@@ -144,6 +144,7 @@ def _reset_factory():
     cli_mod._transport_instance = shared_t
     cli_mod._remote_url = None
     cli_mod._remote_api_key = None
+    cli_mod._force_local = False
     import memory_core.server as server_mod
     server_mod._transport = None
     server_mod._api_key_env = None

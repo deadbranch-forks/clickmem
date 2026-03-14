@@ -366,6 +366,9 @@ async def _cc_user_prompt_submit(payload: dict) -> dict:
     """Buffer the user prompt so the Stop handler can build the full turn."""
     session_id = payload.get("session_id", "")
     prompt = payload.get("prompt", "")
+    if not isinstance(prompt, str):
+        import json as _json
+        prompt = _json.dumps(prompt, ensure_ascii=False) if prompt else ""
     if session_id and prompt:
         _cc_prompt_buffers[session_id] = prompt
     return {}
@@ -375,6 +378,9 @@ async def _cc_stop(payload: dict) -> dict:
     """Extract memories from the completed turn (buffered prompt + assistant response)."""
     session_id = payload.get("session_id", "")
     assistant_msg = payload.get("last_assistant_message", "")
+    if not isinstance(assistant_msg, str):
+        import json as _json
+        assistant_msg = _json.dumps(assistant_msg, ensure_ascii=False) if assistant_msg else ""
 
     if not assistant_msg or len(assistant_msg) < 20:
         return {}
