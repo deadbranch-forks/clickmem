@@ -137,6 +137,9 @@ class ContinualRefinement:
             if not content or len(content) < 40:
                 db.mark_raw_processed(raw_id)
                 continue
+            if "[object Object]" in content:
+                db.mark_raw_processed(raw_id)
+                continue
             try:
                 ids = extractor.extract(
                     [{"role": "user", "content": content}],

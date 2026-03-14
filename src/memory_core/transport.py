@@ -216,8 +216,14 @@ class LocalTransport:
             db = self._get_db()
             emb = self._get_emb()
             llm = get_llm_complete()
-            if llm is not None:
+            if llm is None:
+                return
+            while True:
                 ContinualRefinement.run(db, emb, llm)
+                remaining = db.count_raw().get("unprocessed", 0)
+                if remaining == 0:
+                    break
+                _log.info("Refinement: %d unprocessed remaining, continuing...", remaining)
         except Exception as exc:
             _log.warning("Background refinement failed: %s", exc)
         finally:

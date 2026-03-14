@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from memory_core.auth import verify_api_key
+from memory_core.transport import LocalTransport
 
 _log = logging.getLogger("clickmem.server")
 
@@ -78,7 +79,12 @@ def _get_transport():
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    _get_transport()
+    t = _get_transport()
+    if isinstance(t, LocalTransport):
+        raw_counts = t._get_db().count_raw()
+        if raw_counts.get("unprocessed", 0) > 0:
+            _log.info("Startup: %d unprocessed raw, triggering refinement", raw_counts["unprocessed"])
+            t._trigger_refinement()
     yield
 
 

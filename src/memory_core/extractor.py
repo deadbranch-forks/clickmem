@@ -133,8 +133,18 @@ class MemoryExtractor:
 
 
 def _parse_llm_memories(raw: str) -> list[dict]:
-    """Parse LLM response into a list of memory dicts."""
+    """Parse LLM response into a list of memory dicts.
+
+    Handles bare string arrays like ["User prefers Python"] by converting
+    each string into a dict with default layer/category.
+    """
     result = extract_json_or(raw, [], expect="array")
     if isinstance(result, dict):
         return [result]
-    return result
+    normalized = []
+    for item in result:
+        if isinstance(item, dict):
+            normalized.append(item)
+        elif isinstance(item, str) and len(item.strip()) > 10:
+            normalized.append({"content": item.strip(), "layer": "episodic", "category": "event"})
+    return normalized
