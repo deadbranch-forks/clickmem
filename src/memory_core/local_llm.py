@@ -6,10 +6,10 @@ Backend priority:
 3. No GPU → refuse to load (fall back to remote LLM via llm.py)
 
 Model auto-selection based on available memory:
-  Apple Silicon unified memory:
-    >=32 GB → Qwen/Qwen3.5-9B
-    >=16 GB → Qwen/Qwen3.5-4B
-    >= 8 GB → Qwen/Qwen3.5-2B
+  Apple Silicon (MLX, uses 4-bit quantized models for speed):
+    >=32 GB → mlx-community/Qwen3.5-9B-4bit
+    >=16 GB → mlx-community/Qwen3.5-4B-MLX-4bit
+    >= 8 GB → mlx-community/Qwen3.5-2B-OptiQ-4bit
   CUDA VRAM:
     >=16 GB → Qwen/Qwen3.5-9B
     >= 8 GB → Qwen/Qwen3.5-4B
@@ -29,9 +29,9 @@ import threading
 logger = logging.getLogger(__name__)
 
 _MLX_THRESHOLDS = [
-    (32, "Qwen/Qwen3.5-9B"),
-    (16, "Qwen/Qwen3.5-4B"),
-    (8, "Qwen/Qwen3.5-2B"),
+    (32, "mlx-community/Qwen3.5-9B-4bit"),
+    (16, "mlx-community/Qwen3.5-4B-MLX-4bit"),
+    (8, "mlx-community/Qwen3.5-2B-OptiQ-4bit"),
 ]
 _CUDA_THRESHOLDS = [
     (16, "Qwen/Qwen3.5-9B"),
