@@ -38,7 +38,7 @@ Samples:
 Should this be saved as a long-term fact? If yes, write a single sentence capturing the pattern.
 
 Return ONLY a JSON object:
-{{"should_promote": true, "content": "The team regularly uses microservices.", "category": "knowledge", "tags": ["microservices"]}}
+{{"should_promote": true, "content": "<one sentence capturing the pattern>", "category": "knowledge", "tags": ["{tag}"]}}
 
 If not worth promoting:
 {{"should_promote": false, "content": "", "category": "", "tags": []}}
