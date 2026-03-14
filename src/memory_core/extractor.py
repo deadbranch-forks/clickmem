@@ -74,6 +74,8 @@ class MemoryExtractor:
         memories = _parse_llm_memories(raw_response)
         ids = []
         for mem_data in memories:
+            if not isinstance(mem_data, dict):
+                continue
             layer = mem_data.get("layer", "episodic")
             if layer == "working":
                 self._db.set_working(mem_data.get("content", ""))
@@ -113,6 +115,8 @@ class MemoryExtractor:
         memories = _parse_llm_memories(raw_response)
         ids = []
         for mem_data in memories:
+            if not isinstance(mem_data, dict):
+                continue
             m = Memory(
                 content=mem_data.get("content", ""),
                 layer="episodic",
