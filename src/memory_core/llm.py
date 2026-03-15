@@ -1,9 +1,10 @@
 """LLM provider — routes to local or remote model based on configuration.
 
 Environment variables:
-- CLICKMEM_LLM_MODE:   "local" | "remote" | "auto"  (default: "auto")
-- CLICKMEM_LLM_MODEL:  remote model name              (default: "Qwen/Qwen3.5-2B")
-- CLICKMEM_LOCAL_MODEL: local model path               (default: "Qwen/Qwen3.5-2B")
+- CLICKMEM_LLM_MODE:       "local" | "remote" | "auto"  (default: "auto")
+- CLICKMEM_LLM_MODEL:      remote model name             (default: auto-selected by local_llm)
+- CLICKMEM_LOCAL_MODEL:     local model path              (default: auto-selected by hardware)
+- CLICKMEM_LLM_MAX_TOKENS: max generation tokens         (default: 4096)
 
 In *auto* mode the provider tries the local engine first; if it cannot be
 loaded (missing dependencies, unsupported platform, …) it falls back to
@@ -69,7 +70,7 @@ def get_llm_info() -> dict:
             info["local_loaded"] = False
 
     if mode in ("remote", "auto"):
-        info["remote_model"] = os.environ.get("CLICKMEM_LLM_MODEL", "Qwen/Qwen3.5-2B")
+        info["remote_model"] = os.environ.get("CLICKMEM_LLM_MODEL", _default_remote_model())
 
     return info
 
@@ -112,13 +113,30 @@ def _get_local_complete() -> Optional[Callable[[str], str]]:
 # Remote engine (litellm)
 # ------------------------------------------------------------------
 
+def _default_remote_model() -> str:
+    """Pick a remote model name that mirrors the local auto-select logic."""
+    from memory_core.local_llm import _auto_select_model
+    auto = _auto_select_model()
+    if auto:
+        # Strip mlx-community/ prefix — remote uses Qwen/ namespace
+        name = auto.split("/")[-1]
+        # Strip quantization suffixes (e.g. "-4bit", "-MLX-4bit", "-OptiQ-4bit")
+        for suffix in ("-4bit", "-MLX-4bit", "-OptiQ-4bit"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        return f"Qwen/{name}"
+    return "Qwen/Qwen3.5-4B"
+
+
 def _get_remote_complete() -> Optional[Callable[[str], str]]:
     try:
         import litellm
     except ImportError:
         return None
 
-    model = os.environ.get("CLICKMEM_LLM_MODEL", "Qwen/Qwen3.5-2B")
+    model = os.environ.get("CLICKMEM_LLM_MODEL", _default_remote_model())
+    max_tokens = int(os.environ.get("CLICKMEM_LLM_MAX_TOKENS", "4096"))
 
     def complete(prompt: str) -> str:
         kwargs: dict = {
@@ -127,12 +145,12 @@ def _get_remote_complete() -> Optional[Callable[[str], str]]:
         }
         try:
             kwargs["temperature"] = 0
-            kwargs["max_tokens"] = 1024
+            kwargs["max_tokens"] = max_tokens
             resp = litellm.completion(**kwargs)
         except litellm.exceptions.BadRequestError:
             kwargs.pop("temperature", None)
             kwargs.pop("max_tokens", None)
-            kwargs["max_completion_tokens"] = 1024
+            kwargs["max_completion_tokens"] = max_tokens
             resp = litellm.completion(**kwargs)
         return resp.choices[0].message.content.strip()
 
