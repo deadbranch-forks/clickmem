@@ -41,8 +41,20 @@ _CUDA_THRESHOLDS = [
 
 
 def _strip_think_tags(text: str) -> str:
-    """Remove <think>...</think> blocks emitted by reasoning-mode models."""
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    """Remove <think>...</think> blocks and plain-text thinking preamble.
+
+    Qwen3.5 4-bit quantized models sometimes emit ``Thinking Process:\\n...``
+    instead of ``<think>`` tags.  After stripping XML tags, if the remaining
+    text starts with non-JSON content we skip ahead to the first ``[`` or ``{``.
+    """
+    # 1. Remove <think>...</think> blocks
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    # 2. If remaining text starts with non-JSON (plain-text thinking), skip to first JSON
+    if text and text[0] not in "{[":
+        match = re.search(r"[\[{]", text)
+        if match:
+            text = text[match.start():]
+    return text.strip()
 
 
 def _get_system_memory_gb() -> float:
@@ -117,11 +129,13 @@ class LocalLLMEngine:
     def __init__(
         self,
         model_name: str | None = None,
-        max_tokens: int = 1024,
+        max_tokens: int | None = None,
     ):
         self._explicit_model = model_name or os.environ.get("CLICKMEM_LOCAL_MODEL")
         self._model_name: str | None = self._explicit_model
-        self._max_tokens = max_tokens
+        self._max_tokens = max_tokens or int(
+            os.environ.get("CLICKMEM_LLM_MAX_TOKENS", "4096")
+        )
         self._backend: str | None = None
         self._generate_fn = None
         self._lock = threading.Lock()

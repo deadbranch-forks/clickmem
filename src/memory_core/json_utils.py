@@ -36,19 +36,22 @@ def extract_json(text: str, expect: str = "auto"):
     else:
         clean = text
 
-    # 3. Scan for first valid JSON value using raw_decode
+    # 3. Scan — collect ALL valid JSON, return the largest
     targets = _open_chars(expect)
     decoder = json.JSONDecoder()
+    best = None
+    best_len = 0
     for i, ch in enumerate(clean):
         if ch in targets:
             try:
-                result, _ = decoder.raw_decode(clean, i)
-                if _type_ok(result, expect):
-                    return result
+                result, end = decoder.raw_decode(clean, i)
+                if _type_ok(result, expect) and (end - i) > best_len:
+                    best = result
+                    best_len = end - i
             except (json.JSONDecodeError, ValueError):
                 continue
 
-    return None
+    return best
 
 
 def extract_json_or(text: str, default, expect: str = "auto"):

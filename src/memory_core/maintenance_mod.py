@@ -57,6 +57,21 @@ If everything looks fine:
 {{"stale_ids": [], "updates": []}}
 """
 
+_SYNTHESIZE_PROMPT = """\
+Below are related episodic memories from a user's conversations.
+Synthesize them into ONE durable biographical fact about this person.
+Combine related details. Do NOT repeat individual events.
+
+Memories:
+{memories}
+
+Return ONLY a JSON object:
+{{"content": "one sentence biographical fact", "category": "identity|career|project|experience|preference", "tags": ["tag1"], "entities": ["Entity1"]}}
+
+If these memories are too trivial or transient to form a durable fact:
+{{"content": "", "skip": true}}
+"""
+
 _REVIEW_BATCH_SIZE = 10
 
 
@@ -71,8 +86,11 @@ class maintenance:
         promoted = 0
         reviewed = 0
 
+        synthesized = 0
+
         if llm_complete and emb:
             promoted = maintenance.promote_to_semantic(db, llm_complete, emb)
+            synthesized = maintenance.synthesize_experiences(db, llm_complete, emb)
 
         if llm_complete:
             reviewed = maintenance.review_semantic(db, llm_complete)
@@ -84,6 +102,7 @@ class maintenance:
             "deleted_purged": purged,
             "compressed": compressed,
             "promoted": promoted,
+            "synthesized": synthesized,
             "reviewed": reviewed,
         }
 
@@ -219,3 +238,62 @@ class maintenance:
             total_reviewed += len(batch)
 
         return total_reviewed
+
+    @staticmethod
+    def synthesize_experiences(
+        db: "MemoryDB", llm_complete, emb, similarity_threshold: float = 0.65
+    ) -> int:
+        """Synthesize clusters of related episodic memories into semantic facts."""
+        from memory_core.refinement import _cosine_similarity
+
+        episodics = db.list_by_layer("episodic", limit=200)
+        if len(episodics) < 3:
+            return 0
+
+        # Cluster by embedding similarity
+        assigned: set[str] = set()
+        clusters: list[list] = []
+        for i, a in enumerate(episodics):
+            if a.id in assigned:
+                continue
+            cluster = [a]
+            assigned.add(a.id)
+            for j in range(i + 1, len(episodics)):
+                b = episodics[j]
+                if b.id in assigned:
+                    continue
+                if a.embedding and b.embedding:
+                    if _cosine_similarity(a.embedding, b.embedding) >= similarity_threshold:
+                        cluster.append(b)
+                        assigned.add(b.id)
+            if len(cluster) >= 3:
+                clusters.append(cluster)
+
+        synthesized = 0
+        for cluster in clusters:
+            memories_text = "\n".join(f"- {m.content}" for m in cluster[:8])
+            raw = llm_complete(_SYNTHESIZE_PROMPT.format(memories=memories_text))
+            data = extract_json_or(raw, {}, expect="object")
+
+            content = data.get("content", "")
+            if not content or data.get("skip"):
+                continue
+
+            # Dedup: skip if identical semantic already exists
+            existing = db.list_by_layer("semantic", limit=100)
+            if any(e.content.strip().lower() == content.strip().lower() for e in existing):
+                continue
+
+            new_mem = Memory(
+                content=content,
+                layer="semantic",
+                category=data.get("category", "knowledge"),
+                tags=data.get("tags", []),
+                entities=data.get("entities", []),
+                embedding=emb.encode_document(content),
+                source="synthesis",
+            )
+            db.insert(new_mem)
+            synthesized += 1
+
+        return synthesized
