@@ -1,5 +1,7 @@
 # ClickMem
 
+![ClickMem — CEO Brain for AI Coding Agents](assets/clickmem-banner.png)
+
 **CEO Brain for AI coding agents — local-first, persistent, LAN-shareable.**
 
 AI coding assistants forget everything between sessions. ClickMem extracts structured knowledge from your conversations — decisions with reasoning, reusable principles, project context — and injects it back when you start a new session. Your agents inherit your thinking patterns, not just raw facts.
