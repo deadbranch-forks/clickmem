@@ -190,6 +190,10 @@ def _reset_factory():
     EpisodeFactory.reset()
     shared_t = _get_shared_cli_transport()
     shared_t._get_db()._truncate()
+    try:
+        shared_t._get_ceo_db()._truncate()
+    except Exception:
+        pass
     import memory_core.cli as cli_mod
     cli_mod._db_instance = None
     cli_mod._transport_instance = shared_t

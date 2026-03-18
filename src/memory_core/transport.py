@@ -108,9 +108,11 @@ class LocalTransport:
             ceo_results = ceo_search(
                 ceo_db, emb, query, project_id=current_project_id, top_k=top_k,
             )
+            _CEO_LAYER_MAP = {"decision": "semantic", "principle": "semantic", "episode": "episodic"}
             for r in ceo_results:
                 r.setdefault("final_score", r.get("score", 0))
                 r.setdefault("source", "ceo")
+                r.setdefault("layer", _CEO_LAYER_MAP.get(r.get("entity_type", ""), "semantic"))
         except Exception:
             ceo_results = []
 
