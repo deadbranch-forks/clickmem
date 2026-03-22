@@ -648,16 +648,18 @@ class CeoDB:
     # Keyword search (cross-entity)
     # ======================================================================
 
-    def _keyword_where(self, keywords: list[str], content_col: str = "content") -> str:
-        """Build WHERE clause matching keywords in content, tags, or entities."""
+    def _keyword_where(self, keywords: list[str], content_col: str = "content",
+                       has_tags: bool = True, has_entities: bool = True) -> str:
+        """Build WHERE clause matching keywords in content and optional array columns."""
         if not keywords:
             return "0"
         kw_array = self._array_literal(keywords)
-        return (
-            f"(multiSearchAnyCaseInsensitive({content_col}, {kw_array}) "
-            f"OR hasAny(tags, {kw_array}) "
-            f"OR hasAny(entities, {kw_array}))"
-        )
+        parts = [f"multiSearchAnyCaseInsensitive({content_col}, {kw_array})"]
+        if has_tags:
+            parts.append(f"hasAny(tags, {kw_array})")
+        if has_entities:
+            parts.append(f"hasAny(entities, {kw_array})")
+        return f"({' OR '.join(parts)})"
 
     def search_by_keywords(
         self,
@@ -670,10 +672,12 @@ class CeoDB:
             return []
         results: list[dict] = []
 
-        kw_where = self._keyword_where(keywords)
-
-        # Decisions (content = title || choice || reasoning)
-        conds = [kw_where.replace("content", "concat(title, ' ', choice, ' ', reasoning)")]
+        # Decisions: has tags but no entities column
+        kw_decisions = self._keyword_where(
+            keywords, content_col="concat(title, ' ', choice, ' ', reasoning)",
+            has_tags=True, has_entities=False,
+        )
+        conds = [kw_decisions]
         if project_id is not None:
             conds.append(f"project_id = '{self._escape(project_id)}'")
         where = " AND ".join(conds)
@@ -689,8 +693,12 @@ class CeoDB:
                               "outcome_status": d.outcome_status, "project_id": d.project_id},
             })
 
-        # Principles
-        conds = [kw_where, "is_active = 1"]
+        # Principles: has no tags or entities columns
+        kw_principles = self._keyword_where(
+            keywords, content_col="content",
+            has_tags=False, has_entities=False,
+        )
+        conds = [kw_principles, "is_active = 1"]
         if project_id is not None:
             conds.append(f"project_id = '{self._escape(project_id)}'")
         where = " AND ".join(conds)
@@ -706,8 +714,12 @@ class CeoDB:
                               "project_id": p.project_id},
             })
 
-        # Episodes
-        conds = [kw_where]
+        # Episodes: has tags and entities
+        kw_episodes = self._keyword_where(
+            keywords, content_col="content",
+            has_tags=True, has_entities=True,
+        )
+        conds = [kw_episodes]
         if project_id is not None:
             conds.append(f"project_id = '{self._escape(project_id)}'")
         where = " AND ".join(conds)
@@ -724,8 +736,12 @@ class CeoDB:
                               "project_id": e.project_id},
             })
 
-        # Facts
-        conds = [kw_where]
+        # Facts: has tags and entities
+        kw_facts = self._keyword_where(
+            keywords, content_col="content",
+            has_tags=True, has_entities=True,
+        )
+        conds = [kw_facts]
         if project_id is not None:
             conds.append(f"project_id = '{self._escape(project_id)}'")
         where = " AND ".join(conds)

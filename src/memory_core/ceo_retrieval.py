@@ -309,10 +309,16 @@ def ceo_search(
     for t in qa.expanded_terms:
         if t not in keywords:
             keywords.append(t)
+    # Map entity_type names to the types list format (e.g. "decision" → "decisions")
+    _TYPE_TO_PLURAL = {"decision": "decisions", "principle": "principles",
+                       "episode": "episodes", "fact": "facts"}
     kw_results: list[dict] = []
     if keywords:
         try:
-            kw_results = ceo_db.search_by_keywords(keywords, project_id=None, limit=top_k * 2)
+            raw_kw = ceo_db.search_by_keywords(keywords, project_id=None, limit=top_k * 2)
+            # Filter to only entity types the caller requested
+            kw_results = [r for r in raw_kw
+                          if _TYPE_TO_PLURAL.get(r.get("entity_type", ""), "") in types]
         except Exception as exc:
             logger.debug("Keyword search failed: %s", exc)
 
