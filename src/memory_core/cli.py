@@ -706,21 +706,28 @@ def _install_claude_hooks(server_url: str) -> bool:
 
         settings.setdefault("enabledPlugins", {})["clickmem@local"] = True
 
-        # Clean up old inline hooks that the plugin now provides
-        old_hooks = settings.get("hooks", {})
-        for event in ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"):
-            event_hooks = old_hooks.get(event, [])
-            if isinstance(event_hooks, list):
-                old_hooks[event] = [
-                    h for h in event_hooks
-                    if hook_url not in json.dumps(h)
-                ]
-                if not old_hooks[event]:
-                    del old_hooks[event]
-        if old_hooks:
-            settings["hooks"] = old_hooks
-        elif "hooks" in settings:
-            del settings["hooks"]
+        # Also write inline hooks to settings.json as a fallback.
+        # Plugin hooks and settings.json hooks can coexist safely —
+        # the server deduplicates ingested content. This ensures the
+        # current session keeps working (it loaded hooks from settings.json
+        # at startup, before the plugin existed).
+        hooks = settings.setdefault("hooks", {})
+        http_entry = {"hooks": [{"type": "http", "url": hook_url, "timeout": 30}]}
+        cmd_entry = {"hooks": [{
+            "type": "command",
+            "command": f"curl -s -X POST -H 'Content-Type: application/json' -d @- {hook_url}",
+            "timeout": 60,
+        }]}
+        for event, entry in [
+            ("SessionStart", http_entry), ("UserPromptSubmit", http_entry),
+            ("Stop", cmd_entry), ("SessionEnd", cmd_entry),
+        ]:
+            event_hooks = hooks.get(event, [])
+            if not isinstance(event_hooks, list):
+                event_hooks = []
+            if not any(hook_url in json.dumps(h) for h in event_hooks):
+                event_hooks.append(entry)
+            hooks[event] = event_hooks
 
         with open(settings_path, "w") as f:
             json.dump(settings, f, indent=2)
