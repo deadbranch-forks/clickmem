@@ -281,12 +281,22 @@ def recall(
         key = r.get("source", r.get("layer", "unknown"))
         by_source.setdefault(key, []).append(r)
 
+    # Determine display width: use terminal width minus margin, min 80
+    try:
+        term_width = shutil.get_terminal_size().columns
+    except Exception:
+        term_width = 120
+    content_width = max(80, term_width - 20)  # leave room for prefix/score
+
     for src, items in by_source.items():
         console.print(f"\n── {src.capitalize()} {'─' * 40}")
         for r in items:
             score = r.get("final_score", 0)
             entity = r.get("entity_type", r.get("category", ""))
-            console.print(f"  [{entity}] {r.get('content', '')[:80]}  (score={score:.2f})")
+            content = r.get("content", "").replace("\n", " ")
+            if len(content) > content_width:
+                content = content[:content_width] + "…"
+            console.print(f"  [{entity}] {content}  (score={score:.2f})")
 
 
 _UUID_PATTERN = re.compile(r'^[0-9a-f]{8}(-[0-9a-f]{4}){0,3}', re.IGNORECASE)
