@@ -139,6 +139,22 @@ class Episode:
 
 
 @dataclass
+class Fact:
+    """A piece of factual/reference knowledge — infrastructure, config, contacts, etc."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str = ""  # empty = global fact
+    content: str = ""
+    category: str = "infrastructure"  # infrastructure | config | contact | reference | other
+    domain: str = "ops"  # tech | product | ops | etc.
+    tags: list[str] = field(default_factory=list)
+    entities: list[str] = field(default_factory=list)
+    embedding: Optional[list[float]] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+@dataclass
 class CEORetrievalConfig:
     """Configuration for CEO context retrieval."""
 

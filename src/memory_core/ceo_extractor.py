@@ -62,10 +62,19 @@ Possible types:
 different from what the working directory suggests:
    {{"type": "project_hint", "project_name": "the actual project being discussed"}}
 
+6. **fact** — A piece of factual/reference knowledge (server IPs, deployment locations, \
+API endpoints, credentials locations, team contacts, infrastructure details):
+   {{"type": "fact", "content": "the factual statement", \
+"category": "infrastructure|config|contact|reference|other", \
+"domain": "tech|product|ops", "tags": ["..."], "entities": ["..."]}}
+
 Rules:
 - Prefer fewer, higher-quality extractions over many low-quality ones.
 - Do not invent information not present in the conversation.
 - Decisions must be actual choices made, not hypothetical discussions.
+- Facts are standalone reference information that someone would look up later. \
+Good facts: server IPs, deployment hosts, API keys locations, service URLs, team contacts. \
+Do NOT extract common knowledge or information already encoded as decisions/principles.
 - If the conversation contains role-based workflow outputs (JSON with APPROVE/REJECT/IMPROVE), \
 extract the underlying product or tech decision, not the approval action itself. \
 The real decision is what was approved and why — extract that substance.
@@ -94,6 +103,7 @@ class ExtractionResult:
     episode_ids: list[str] = field(default_factory=list)
     decision_ids: list[str] = field(default_factory=list)
     principle_ids: list[str] = field(default_factory=list)
+    fact_ids: list[str] = field(default_factory=list)
     project_updates: list[dict] = field(default_factory=list)
 
 
@@ -192,6 +202,10 @@ class CEOExtractor:
                     pid = self._process_principle(item, effective_project_id)
                     if pid:
                         result.principle_ids.append(pid)
+                elif item_type == "fact":
+                    fid = self._process_fact(item, effective_project_id)
+                    if fid:
+                        result.fact_ids.append(fid)
                 elif item_type == "project_update":
                     result.project_updates.append(item)
                     if effective_project_id:
@@ -307,6 +321,41 @@ class CEOExtractor:
             return None
 
         return self._db.insert_principle(p)
+
+    def _process_fact(self, item: dict, project_id: str) -> str | None:
+        content = item.get("content", "")
+        if not content:
+            return None
+
+        from memory_core.models import Fact
+
+        f = Fact(
+            project_id=project_id,
+            content=content,
+            category=item.get("category", "infrastructure"),
+            domain=item.get("domain", "ops"),
+            tags=item.get("tags", []),
+            entities=item.get("entities", []),
+        )
+        if self._emb:
+            f.embedding = self._emb.encode_document(content)
+
+        # Dedup: if a very similar fact exists, update it instead of adding
+        existing_facts = self._db.search_facts_by_vector(
+            f.embedding, project_id=None, limit=3,
+        ) if f.embedding else []
+        for ef in existing_facts:
+            if ef.embedding:
+                dist = self._db._cosine_dist(f.embedding, ef.embedding)
+                if dist < 0.10:  # similarity > 0.90 → update
+                    self._db.update_fact(ef.id, content=content,
+                                         category=f.category, domain=f.domain,
+                                         tags=f.tags, entities=f.entities,
+                                         embedding=f.embedding)
+                    logger.info("Fact dedup: updated existing %s", ef.id[:8])
+                    return ef.id
+
+        return self._db.insert_fact(f)
 
     @staticmethod
     def _parse_response(raw: str) -> list[dict]:

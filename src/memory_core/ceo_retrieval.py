@@ -97,7 +97,7 @@ def ceo_search(
 
     t0 = time.monotonic()
     query_vec = emb.encode_query(query[:500])
-    types = entity_types or ["decisions", "principles", "episodes"]
+    types = entity_types or ["decisions", "principles", "episodes", "facts"]
     results: list[dict] = []
 
     # Session topic tracking
@@ -203,6 +203,27 @@ def ceo_search(
                         "user_intent": e.user_intent,
                         "domain": e.domain,
                         "project_id": e.project_id,
+                    },
+                })
+
+        if "facts" in types:
+            facts = ceo_db.search_facts_by_vector(query_vec, project_id=pid, limit=top_k)
+            for ft in facts:
+                if domain and ft.domain != domain:
+                    continue
+                dist = ceo_db._cosine_dist(query_vec, ft.embedding) if ft.embedding else 1.0
+                score = 1.0 - dist
+                # No time decay for facts — they stay valid until explicitly updated
+                score *= _project_boost(ft.project_id)
+                results.append({
+                    "entity_type": "fact",
+                    "id": ft.id,
+                    "content": ft.content,
+                    "score": score,
+                    "metadata": {
+                        "category": ft.category,
+                        "domain": ft.domain,
+                        "project_id": ft.project_id,
                     },
                 })
 

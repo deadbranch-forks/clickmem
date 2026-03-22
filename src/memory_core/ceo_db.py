@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from memory_core.db import _get_session, _parse_dt
-from memory_core.models import Decision, Episode, Principle, Project
+from memory_core.models import Decision, Episode, Fact, Principle, Project
 
 # ---------------------------------------------------------------------------
 # DDL
@@ -97,8 +97,25 @@ TTL toDateTime(created_at) + INTERVAL 180 DAY
 """
 
 
+_CREATE_FACTS = """
+CREATE TABLE IF NOT EXISTS facts (
+    id              String,
+    project_id      String DEFAULT '',
+    content         String,
+    category        String DEFAULT 'infrastructure',
+    domain          String DEFAULT 'ops',
+    tags            Array(String),
+    entities        Array(String),
+    embedding       Array(Float32),
+    created_at      DateTime64(3, 'UTC'),
+    updated_at      DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (id)
+"""
+
+
 class CeoDB:
-    """CEO Brain storage with four entity tables plus raw_transcripts."""
+    """CEO Brain storage with five entity tables plus raw_transcripts."""
 
     def __init__(self, db_path: str = ":memory:"):
         self._session = _get_session(db_path)
@@ -106,6 +123,7 @@ class CeoDB:
         self._session.query(_CREATE_DECISIONS)
         self._session.query(_CREATE_PRINCIPLES)
         self._session.query(_CREATE_EPISODES)
+        self._session.query(_CREATE_FACTS)
         # DDL migration: add activation_scope + scope_embedding columns
         for tbl in ("decisions", "principles"):
             self._session.query(
@@ -144,7 +162,7 @@ class CeoDB:
 
     def _truncate(self) -> None:
         """Drop all data from CEO tables (for test isolation)."""
-        for tbl in ("projects", "decisions", "principles", "episodes"):
+        for tbl in ("projects", "decisions", "principles", "episodes", "facts"):
             self._session.query(f"TRUNCATE TABLE IF EXISTS {tbl}")
 
     def query(self, sql: str) -> list[dict]:
@@ -538,6 +556,95 @@ class CeoDB:
         )
 
     # ======================================================================
+    # Facts CRUD
+    # ======================================================================
+
+    def insert_fact(self, fact: Fact) -> str:
+        now = self._now_str()
+        created = fact.created_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if fact.created_at else now
+        updated = fact.updated_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if fact.updated_at else now
+        emb = self._float_array_literal(fact.embedding) if fact.embedding else "[]"
+
+        sql = (
+            f"INSERT INTO facts (id, project_id, content, category, domain, "
+            f"tags, entities, embedding, created_at, updated_at) VALUES "
+            f"('{self._escape(fact.id)}', '{self._escape(fact.project_id)}', "
+            f"'{self._escape(fact.content)}', '{self._escape(fact.category)}', "
+            f"'{self._escape(fact.domain)}', "
+            f"{self._array_literal(fact.tags)}, "
+            f"{self._array_literal(fact.entities)}, "
+            f"{emb}, '{created}', '{updated}')"
+        )
+        self._session.query(sql)
+        return fact.id
+
+    def get_fact(self, fact_id: str) -> Fact | None:
+        rows = self._query_json(
+            f"SELECT * FROM facts FINAL WHERE id = '{self._escape(fact_id)}'"
+        )
+        return self._row_to_fact(rows[0]) if rows else None
+
+    def update_fact(self, fact_id: str, **kwargs) -> None:
+        existing = self.get_fact(fact_id)
+        if existing is None:
+            return
+        for k, v in kwargs.items():
+            if hasattr(existing, k):
+                setattr(existing, k, v)
+        existing.updated_at = datetime.now(timezone.utc)
+        self.insert_fact(existing)
+
+    def list_facts(
+        self,
+        project_id: str | None = None,
+        category: str | None = None,
+        limit: int = 50,
+    ) -> list[Fact]:
+        conds: list[str] = []
+        if project_id is not None:
+            conds.append(f"project_id = '{self._escape(project_id)}'")
+        if category:
+            conds.append(f"category = '{self._escape(category)}'")
+        where = " AND ".join(conds) if conds else "1 = 1"
+        rows = self._query_json(
+            f"SELECT * FROM facts FINAL WHERE {where} "
+            f"ORDER BY updated_at DESC LIMIT {limit}"
+        )
+        return [self._row_to_fact(r) for r in rows]
+
+    def search_facts_by_vector(
+        self,
+        query_vec: list[float],
+        project_id: str | None = None,
+        limit: int = 10,
+    ) -> list[Fact]:
+        vec_literal = self._float_array_literal(query_vec)
+        conds = ["length(embedding) > 0"]
+        if project_id is not None:
+            conds.append(f"project_id = '{self._escape(project_id)}'")
+        where = " AND ".join(conds)
+        rows = self._query_json(
+            f"SELECT *, cosineDistance(embedding, {vec_literal}) AS _dist "
+            f"FROM facts FINAL WHERE {where} "
+            f"ORDER BY _dist ASC LIMIT {limit}"
+        )
+        return [self._row_to_fact(r) for r in rows]
+
+    def _row_to_fact(self, row: dict) -> Fact:
+        return Fact(
+            id=row["id"],
+            project_id=row.get("project_id", ""),
+            content=row.get("content", ""),
+            category=row.get("category", "infrastructure"),
+            domain=row.get("domain", "ops"),
+            tags=row.get("tags", []),
+            entities=row.get("entities", []),
+            embedding=row.get("embedding"),
+            created_at=_parse_dt(row.get("created_at")),
+            updated_at=_parse_dt(row.get("updated_at")),
+        )
+
+    # ======================================================================
     # Cross-entity search
     # ======================================================================
 
@@ -547,7 +654,7 @@ class CeoDB:
         project_id: str | None = None,
         limit: int = 15,
     ) -> list[dict]:
-        """Search across decisions, principles, and episodes. Returns unified dicts."""
+        """Search across decisions, principles, episodes, and facts. Returns unified dicts."""
         results: list[dict] = []
 
         # Search each entity type
@@ -586,6 +693,17 @@ class CeoDB:
                 "metadata": {"user_intent": e.user_intent, "domain": e.domain},
             })
 
+        facts = self.search_facts_by_vector(query_vec, project_id=project_id, limit=limit)
+        for ft in facts:
+            dist = self._cosine_dist(query_vec, ft.embedding) if ft.embedding else 1.0
+            results.append({
+                "entity_type": "fact",
+                "id": ft.id,
+                "content": ft.content,
+                "score": 1.0 - dist,
+                "metadata": {"category": ft.category, "domain": ft.domain},
+            })
+
         # Sort by score desc and limit
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]
@@ -609,8 +727,8 @@ class CeoDB:
     def count_all(self) -> dict[str, int]:
         """Return counts for each CEO entity table."""
         result = {}
-        for tbl in ("projects", "decisions", "principles", "episodes"):
-            final = " FINAL" if tbl != "episodes" else ""
+        for tbl in ("projects", "decisions", "principles", "episodes", "facts"):
+            final = " FINAL" if tbl not in ("episodes",) else ""
             rows = self._query_json(f"SELECT count() as cnt FROM {tbl}{final}")
             result[tbl] = int(rows[0]["cnt"]) if rows else 0
         return result

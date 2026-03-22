@@ -622,34 +622,111 @@ def hooks_status_cmd():
 
 
 def _install_claude_hooks(server_url: str) -> bool:
-    settings_path = os.path.expanduser("~/.claude/settings.json")
+    """Install ClickMem as a Claude Code plugin with hooks.
+
+    Creates a plugin directory at ~/.clickmem/claude-plugin/ with proper
+    .claude-plugin/plugin.json and hooks/hooks.json, then registers it
+    in ~/.claude/plugins/installed_plugins.json.
+    """
+    plugin_dir = os.path.expanduser("~/.clickmem/claude-plugin")
+    hook_url = f"{server_url}/hooks/claude-code"
+
     try:
-        data = {}
-        if os.path.exists(settings_path):
-            with open(settings_path) as f:
-                data = json.load(f)
+        # Step 1: Create plugin directory structure
+        os.makedirs(os.path.join(plugin_dir, ".claude-plugin"), exist_ok=True)
+        os.makedirs(os.path.join(plugin_dir, "hooks"), exist_ok=True)
 
-        hooks = data.setdefault("hooks", {})
-        hook_url = f"{server_url}/hooks/claude-code"
-        hook_entry = {"hooks": [{"type": "http", "url": hook_url}]}
-
-        for event in ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"):
-            event_hooks = hooks.get(event, [])
-            if not isinstance(event_hooks, list):
-                event_hooks = []
-            already = any(
-                hook_url in json.dumps(h) for h in event_hooks
-            )
-            if not already:
-                event_hooks.append(hook_entry)
-            hooks[event] = event_hooks
-
-        data["hooks"] = hooks
-        os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-        with open(settings_path, "w") as f:
-            json.dump(data, f, indent=2)
+        # Step 2: Write .claude-plugin/plugin.json
+        plugin_meta = {
+            "name": "clickmem",
+            "version": "1.0.0",
+            "description": "Automatic long-term memory for AI coding sessions. "
+                           "Captures conversation transcripts and injects cross-session context.",
+            "author": {"name": "auxten"},
+        }
+        with open(os.path.join(plugin_dir, ".claude-plugin", "plugin.json"), "w") as f:
+            json.dump(plugin_meta, f, indent=2)
             f.write("\n")
 
+        # Step 3: Write hooks/hooks.json with the actual server URL
+        hooks_config = {
+            "description": "ClickMem hooks — captures conversations and injects long-term memory context",
+            "hooks": {
+                "SessionStart": [{"hooks": [
+                    {"type": "http", "url": hook_url, "timeout": 30},
+                ]}],
+                "UserPromptSubmit": [{"hooks": [
+                    {"type": "http", "url": hook_url, "timeout": 30},
+                ]}],
+                "Stop": [{"hooks": [
+                    {"type": "command",
+                     "command": f"curl -s -X POST -H 'Content-Type: application/json' -d @- {hook_url}",
+                     "timeout": 60},
+                ]}],
+                "SessionEnd": [{"hooks": [
+                    {"type": "command",
+                     "command": f"curl -s -X POST -H 'Content-Type: application/json' -d @- {hook_url}",
+                     "timeout": 60},
+                ]}],
+            },
+        }
+        with open(os.path.join(plugin_dir, "hooks", "hooks.json"), "w") as f:
+            json.dump(hooks_config, f, indent=2)
+            f.write("\n")
+
+        # Step 4: Register in installed_plugins.json
+        plugins_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
+        os.makedirs(os.path.dirname(plugins_path), exist_ok=True)
+
+        plugins_data = {"version": 2, "plugins": {}}
+        if os.path.isfile(plugins_path):
+            with open(plugins_path) as f:
+                plugins_data = json.load(f)
+
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        plugins_data.setdefault("plugins", {})["clickmem@local"] = [{
+            "scope": "user",
+            "installPath": plugin_dir,
+            "version": "1.0.0",
+            "installedAt": now_iso,
+            "lastUpdated": now_iso,
+            "isLocal": True,
+        }]
+
+        with open(plugins_path, "w") as f:
+            json.dump(plugins_data, f, indent=2)
+            f.write("\n")
+
+        # Step 5: Enable the plugin in settings.json
+        settings_path = os.path.expanduser("~/.claude/settings.json")
+        settings = {}
+        if os.path.isfile(settings_path):
+            with open(settings_path) as f:
+                settings = json.load(f)
+
+        settings.setdefault("enabledPlugins", {})["clickmem@local"] = True
+
+        # Clean up old inline hooks that the plugin now provides
+        old_hooks = settings.get("hooks", {})
+        for event in ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"):
+            event_hooks = old_hooks.get(event, [])
+            if isinstance(event_hooks, list):
+                old_hooks[event] = [
+                    h for h in event_hooks
+                    if hook_url not in json.dumps(h)
+                ]
+                if not old_hooks[event]:
+                    del old_hooks[event]
+        if old_hooks:
+            settings["hooks"] = old_hooks
+        elif "hooks" in settings:
+            del settings["hooks"]
+
+        with open(settings_path, "w") as f:
+            json.dump(settings, f, indent=2)
+            f.write("\n")
+
+        console.print(f"  Claude Code: plugin installed at {plugin_dir}")
         console.print(f"  Claude Code: hooks -> {hook_url}")
         return True
     except Exception as e:
@@ -1261,7 +1338,8 @@ def uninstall(
     if not yes and not json_output:
         console.print("\nThis will:")
         console.print("  - Remove clickmem chDB data (~/.openclaw/memory/chdb-data/)")
-        console.print("  - Uninstall the OpenClaw hook")
+        console.print("  - Uninstall hooks (OpenClaw, Claude Code plugin, Cursor)")
+
         confirm = typer.confirm("Continue?")
         if not confirm:
             console.print("Aborted.")
@@ -1285,6 +1363,44 @@ def uninstall(
         except Exception:
             pass
 
+    # Remove Claude Code plugin
+    claude_plugin_dir = os.path.expanduser("~/.clickmem/claude-plugin")
+    if os.path.isdir(claude_plugin_dir):
+        shutil.rmtree(claude_plugin_dir)
+        result["claude_plugin_removed"] = True
+
+    # Remove from installed_plugins.json
+    plugins_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
+    if os.path.isfile(plugins_path):
+        try:
+            with open(plugins_path) as f:
+                pdata = json.load(f)
+            pdata.get("plugins", {}).pop("clickmem@local", None)
+            with open(plugins_path, "w") as f:
+                json.dump(pdata, f, indent=2)
+                f.write("\n")
+        except Exception:
+            pass
+
+    # Remove from enabledPlugins in settings.json
+    settings_path = os.path.expanduser("~/.claude/settings.json")
+    if os.path.isfile(settings_path):
+        try:
+            with open(settings_path) as f:
+                sdata = json.load(f)
+            sdata.get("enabledPlugins", {}).pop("clickmem@local", None)
+            with open(settings_path, "w") as f:
+                json.dump(sdata, f, indent=2)
+                f.write("\n")
+        except Exception:
+            pass
+
+    # Remove Cursor hooks symlink
+    cursor_hook = os.path.expanduser("~/.cursor/hooks/clickmem")
+    if os.path.islink(cursor_hook):
+        os.unlink(cursor_hook)
+        result["cursor_hook_removed"] = True
+
     chdb_data = os.path.expanduser("~/.openclaw/memory/chdb-data")
     if os.path.isdir(chdb_data):
         shutil.rmtree(chdb_data)
@@ -1294,8 +1410,12 @@ def uninstall(
         typer.echo(json.dumps(result))
     else:
         console.print(f"\n[green]✓[/green] ClickMem uninstalled.")
-        if result["hook_removed"]:
-            console.print("  Hook removed.")
+        if result.get("hook_removed"):
+            console.print("  OpenClaw hook removed.")
+        if result.get("claude_plugin_removed"):
+            console.print("  Claude Code plugin removed.")
+        if result.get("cursor_hook_removed"):
+            console.print("  Cursor hook removed.")
         if result["data_removed"]:
             console.print("  chDB data removed.")
         if result["exported_workspaces"]:

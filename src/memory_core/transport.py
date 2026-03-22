@@ -108,7 +108,7 @@ class LocalTransport:
             ceo_results = ceo_search(
                 ceo_db, emb, query, project_id=current_project_id, top_k=top_k,
             )
-            _CEO_LAYER_MAP = {"decision": "semantic", "principle": "semantic", "episode": "episodic"}
+            _CEO_LAYER_MAP = {"decision": "semantic", "principle": "semantic", "episode": "episodic", "fact": "semantic"}
             for r in ceo_results:
                 r.setdefault("final_score", r.get("score", 0))
                 r.setdefault("source", "ceo")
@@ -251,6 +251,22 @@ class LocalTransport:
             session_id=session_id, agent_source=source, raw_id=raw_id,
         )
 
+        # Fallback: if extraction produced nothing, store as raw episode
+        # so the content is still searchable via recall
+        has_entities = (result.episode_ids or result.decision_ids
+                        or result.principle_ids or result.fact_ids)
+        if not has_entities and len(filtered) >= 40:
+            _log.info("CEO extraction returned empty; storing fallback episode (%d chars)", len(filtered))
+            from memory_core.models import Episode
+            ep = Episode(
+                content=filtered, project_id=project_id,
+                session_id=session_id, agent_source=source,
+                raw_id=raw_id,
+                embedding=emb.encode_document(filtered),
+            )
+            ceo_db.insert_episode(ep)
+            result.episode_ids.append(ep.id)
+
         db.mark_raw_processed(raw_id)
 
         return {
@@ -258,6 +274,7 @@ class LocalTransport:
             "episodes": result.episode_ids,
             "decisions": result.decision_ids,
             "principles": result.principle_ids,
+            "facts": result.fact_ids,
             "project_updates": result.project_updates,
         }
 
