@@ -121,7 +121,8 @@ class LocalTransport:
                 r.setdefault("final_score", r.get("score", 0))
                 r.setdefault("source", "ceo")
                 r.setdefault("layer", _CEO_LAYER_MAP.get(r.get("entity_type", ""), "semantic"))
-        except Exception:
+        except Exception as exc:
+            _log.warning("CEO search failed: %s", exc, exc_info=True)
             ceo_results = []
 
         combined = old_results + ceo_results
