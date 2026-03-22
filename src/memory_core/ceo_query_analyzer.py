@@ -17,8 +17,8 @@ from typing import Callable
 # CJK + Latin tokenization
 # ---------------------------------------------------------------------------
 
-_WORD_RE = re.compile(r'[a-zA-Z0-9_.\-@/]+|[\u4e00-\u9fff\u3400-\u4dbf]')
-_CJK_RE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf]')
+_WORD_RE = re.compile(r'[a-zA-Z0-9_.\-@/]+|[\u4e00-\u9fff\u3400-\u4dbf]+')
+_CJK_RE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf]+')
 
 
 # No stopword list — keyword discriminativeness is handled by the scoring

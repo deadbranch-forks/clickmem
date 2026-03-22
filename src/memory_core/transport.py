@@ -99,11 +99,9 @@ class LocalTransport:
             except Exception:
                 pass
 
-        # Get LLM for enhanced mode
-        llm_complete = None
-        if enhanced:
-            from memory_core.llm import get_llm_complete
-            llm_complete = get_llm_complete()
+        # Get LLM for keyword extraction (always) and enhanced features (opt-in)
+        from memory_core.llm import get_llm_complete
+        llm_complete = get_llm_complete()
 
         try:
             ceo_db = self._get_ceo_db()

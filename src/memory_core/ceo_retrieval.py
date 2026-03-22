@@ -31,26 +31,49 @@ _KW_BONUS_WEIGHT = 0.3  # keyword bonus multiplier
 _KW_BONUS_CAP = 1.5  # max keyword boost
 _RRF_K = 60  # reciprocal rank fusion constant
 
-# CJK Unicode ranges for tokenization
-_CJK_RE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf]+')
-_WORD_RE = re.compile(r'[a-zA-Z0-9_.\-@/]+|[\u4e00-\u9fff\u3400-\u4dbf]')
+# Fallback regex tokenizer (used only when LLM is unavailable)
+_WORD_RE = re.compile(r'[a-zA-Z0-9_.\-@/]+|[\u4e00-\u9fff\u3400-\u4dbf]+')
 
 
-def _tokenize_query(query: str) -> list[str]:
-    """Extract tokens from a query string.
-
-    Handles CJK characters (split into individual chars) and Latin words.
-    No stopword filtering — keyword discriminativeness is handled by
-    the scoring layer (IDF-like weighting via match frequency).
-    """
+def _tokenize_query_regex(query: str) -> list[str]:
+    """Fallback: regex-based tokenization when LLM is unavailable."""
     tokens = _WORD_RE.findall(query)
     seen: set[str] = set()
-    keywords = []
-    for t in tokens:
-        if t not in seen:
-            seen.add(t)
-            keywords.append(t)
-    return keywords
+    return [t for t in tokens if t not in seen and not seen.add(t)]
+
+
+_KEYWORD_EXTRACT_PROMPT = """\
+Extract search keywords from this query for a memory recall system.
+
+Query: {query}
+
+Return ONLY a JSON array of keywords (strings). Include:
+- Key nouns and technical terms in the original language
+- English translations of non-English terms
+- Synonyms that someone might have used when storing this information
+
+Example: query "我的 agent 开发原则" → ["agent", "开发", "原则", "development", "principle", "guideline", "rule"]
+
+Return ONLY the JSON array, no other text.
+"""
+
+
+def _tokenize_query(query: str, llm_complete=None) -> list[str]:
+    """Extract search keywords. Uses LLM when available, regex fallback."""
+    if llm_complete is not None:
+        try:
+            import json
+            raw = llm_complete(_KEYWORD_EXTRACT_PROMPT.format(query=query))
+            text = raw.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                text = "\n".join(l for l in lines if not l.strip().startswith("```")).strip()
+            keywords = json.loads(text)
+            if isinstance(keywords, list) and keywords:
+                return [str(k) for k in keywords if k]
+        except Exception:
+            pass
+    return _tokenize_query_regex(query)
 
 
 def _keyword_score(content: str, keywords: list[str]) -> float:
@@ -279,9 +302,13 @@ def ceo_search(
                 })
 
     # ------------------------------------------------------------------
-    # Keyword search: find records matching query keywords
+    # Keyword search: LLM extracts keywords (cross-language), regex fallback
     # ------------------------------------------------------------------
-    keywords = qa.keywords + qa.expanded_terms  # include LLM expansions if available
+    keywords = _tokenize_query(query, llm_complete=llm_complete)
+    # Merge with any expanded terms from query analysis
+    for t in qa.expanded_terms:
+        if t not in keywords:
+            keywords.append(t)
     kw_results: list[dict] = []
     if keywords:
         try:
