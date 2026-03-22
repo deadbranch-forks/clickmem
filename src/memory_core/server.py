@@ -346,15 +346,34 @@ async def claude_code_hook(request: Request):
 
 
 async def _cc_session_start(payload: dict) -> dict:
-    """Build CEO context and inject as additionalContext."""
+    """Build CEO context and inject as additionalContext.
+
+    Also triggers session replay in the background to recover any
+    turns missed by hooks in previous sessions.
+    """
     from memory_core.context_engine import build_ceo_context
     from memory_core.project_detect import detect_project
 
     cwd = payload.get("cwd", "")
+    session_id = payload.get("session_id", "")
 
     t = _get_transport()
     ceo_db = t._get_ceo_db()
     emb = t._get_emb()
+
+    # Background: replay any missed turns from previous sessions
+    try:
+        from memory_core.session_replay import replay_missing_turns
+        replay_result = await asyncio.to_thread(
+            replay_missing_turns, t, cwd=cwd, current_session_id=session_id,
+        )
+        if replay_result.get("turns_replayed", 0) > 0:
+            _log.info(
+                "claude-code SessionStart: replayed %d missed turns from %d sessions",
+                replay_result["turns_replayed"], replay_result["sessions_checked"],
+            )
+    except Exception as exc:
+        _log.debug("Session replay failed: %s", exc)
 
     project_id = await asyncio.to_thread(
         detect_project, ceo_db, cwd=cwd, emb=emb,
